@@ -61,7 +61,10 @@ fn main() {
     };
     let mut stats = Stats::new("routebench".into(), 1);
     let t = Instant::now();
-    let clusters = clustering::main(&points, &cfg, FeatureCollection::default(), &mut stats);
+    let hog: u8 = arg("--hog-cpu").map_or(0, |v| v.parse().unwrap());
+    let clusters = algorithms::utils::with_thread_cap(hog, || {
+        clustering::main(&points, &cfg, FeatureCollection::default(), &mut stats)
+    });
     let cluster_s = t.elapsed().as_secs_f64();
 
     let rcfg = RoutingConfig {
@@ -69,9 +72,12 @@ fn main() {
         plugin_args: String::new(),
         workers,
         location_delay_secs: arg("--location-delay").map_or(0.0, |v| v.parse().unwrap()),
+        hog_cpu: arg("--hog-cpu").map_or(0, |v| v.parse().unwrap()),
     };
     let t = Instant::now();
-    let route = routing::main(&points, clusters.clone(), radius, &rcfg, &mut stats);
+    let route = algorithms::utils::with_thread_cap(hog, || {
+        routing::main(&points, clusters.clone(), radius, &rcfg, &mut stats)
+    });
     let route_s = t.elapsed().as_secs_f64();
     assert_eq!(route.len(), clusters.len(), "route must keep every cluster");
 

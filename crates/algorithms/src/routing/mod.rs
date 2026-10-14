@@ -124,6 +124,7 @@ mod tests {
             plugin_args: String::new(),
             workers: 0,
             location_delay_secs: 0.0,
+            hog_cpu: 0,
         }
     }
 

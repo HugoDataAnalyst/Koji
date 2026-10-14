@@ -86,6 +86,7 @@ fn route(clusters: &SingleVec, sort_by: SortBy) -> (SingleVec, std::time::Durati
         plugin_args: String::new(),
         workers: 0,
         location_delay_secs: 0.0,
+        hog_cpu: 0,
     };
     let mut stats = Stats::new("route".to_string(), 1);
     let t = Instant::now();

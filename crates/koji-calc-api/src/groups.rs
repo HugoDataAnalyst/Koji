@@ -76,6 +76,11 @@ pub struct RoutingArgs {
     /// Default 8. Non-finite or non-positive values fall back to the default.
     #[serde(alias = "jumpSecs", alias = "location_delay")]
     pub location_delay: Option<f64>,
+    /// Max CPU this calculation may use, percent of ALL cores combined (not
+    /// per core): e.g. `100`, `90`, `80`. Accounts for load from other
+    /// processes. Default `KOJI_HOG_CPU` env, else 90.
+    #[serde(alias = "hogCpu")]
+    pub hog_cpu: Option<u8>,
 }
 
 impl RoutingArgs {
@@ -85,6 +90,7 @@ impl RoutingArgs {
             plugin_args: self.plugin_args.unwrap_or_default(),
             workers: self.workers.unwrap_or(0),
             location_delay_secs: self.location_delay.filter(|d| d.is_finite() && *d > 0.0).unwrap_or(0.0),
+            hog_cpu: self.hog_cpu.unwrap_or(0),
         }
     }
 }

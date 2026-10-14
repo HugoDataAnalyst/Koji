@@ -15,7 +15,7 @@ use super::sorting::sort_s2;
 /// Solver resource limits. The solver default (`threads: 0` = every core,
 /// wall-clock budget `n/1000` s up to 120 s) saturates the machine for results
 /// that stop improving long before the budget ends, so the default here caps
-/// both: threads at `KOJI_TSP_THREADS` (else min(cores, 4)) and the budget at
+/// both: threads at the `hog_cpu` pool size (see `thread_cap`) and the budget at
 /// 0.2 ms/point, at most `KOJI_TSP_MAX_SECS` (else 20 s).
 #[derive(Debug, Clone, Copy)]
 pub(super) struct Budget {
@@ -27,12 +27,14 @@ fn env_num<T: std::str::FromStr>(key: &str) -> Option<T> {
     std::env::var(key).ok()?.trim().parse().ok()
 }
 
-/// Max solver threads: `KOJI_TSP_THREADS`, else min(cores, 4).
+/// Max solver threads: the size of the surrounding rayon pool (set by
+/// `utils::with_thread_cap` from `hog_cpu`), optionally lowered by
+/// `KOJI_TSP_THREADS`.
 pub(super) fn thread_cap() -> usize {
-    let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
+    let pool = rayon::current_num_threads().max(1);
     env_num::<usize>("KOJI_TSP_THREADS")
         .filter(|t| *t > 0)
-        .unwrap_or(cores.min(4))
+        .map_or(pool, |t| t.min(pool))
 }
 
 impl Budget {

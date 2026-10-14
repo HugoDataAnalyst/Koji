@@ -35,10 +35,16 @@ Documentation for this project can be found [here](https://koji.vercel.app/)
   slice `i` cut at `len*i/N` is exactly one worker's loop. The response shape is
   unchanged. On ~5k clusters / 15 workers this routes in ~0.35 s (vs ~5 s) with
   ~35% tighter slices.
-- `KOJI_CALC_THREADS` (default `min(cores, 8)`): rayon threads per calculation.
-- `KOJI_TSP_THREADS` (default `min(cores, 4)`), `KOJI_TSP_MAX_SECS` (default 20):
-  caps for the global TSP solve, whose budget is now 0.2 ms/point (it used to be
-  1 ms/point on every core with no quality gain past ~0.1 ms/point).
+- `routing.hogCpu` (alias `hog_cpu`; `100`, `90`, `80`, …; default `KOJI_HOG_CPU`
+  env, else **90**): ceiling on CPU use as a percentage of ALL cores combined,
+  not per core. Threads = `floor(cores × pct/100 − load from other processes)`,
+  at least 1, measured with a ~200 ms (3 s-cached) sample; `100` skips the probe
+  and uses every core. Applies to clustering, routing and bootstrap.
+  `KOJI_CALC_THREADS` / `KOJI_TSP_THREADS` can lower the thread count further.
+  The server's own request handling and DB work are not governed by this.
+- `KOJI_TSP_MAX_SECS` (default 20): cap for the global TSP solve, whose budget is
+  0.2 ms/point (it used to be 1 ms/point on every core with no quality gain past
+  ~0.1 ms/point).
 - `KOJI_SEG_MS_PER_POINT` (default 0.3): per-segment solver budget.
 - `routebench` (`cargo run --release -p algorithms --bin routebench -- --csv pts.csv --workers 15`)
   reports route time and slice loop length / span.

@@ -57,7 +57,7 @@ pub fn run_cluster_route(
         clustering_config.min_points,
     );
 
-    let clusters = algorithms::utils::with_thread_cap(|| {
+    let clusters = algorithms::utils::with_thread_cap(routing_config.hog_cpu, || {
         let clusters = clustering::main(data_points, clustering_config, area, &mut stats);
         routing::main(
             data_points,
@@ -125,7 +125,9 @@ pub fn run_bootstrap(
         1,
     );
     let mut features: Vec<Feature> =
-        bootstrap::main(area, bootstrap_config, routing_config, &mut stats);
+        algorithms::utils::with_thread_cap(routing_config.hog_cpu, || {
+            bootstrap::main(area, bootstrap_config, routing_config, &mut stats)
+        });
     // Label each feature with the instance name (the golbat-family `__mode`
     // nuance is a persistence concern, deferred — see the server's calc module).
     for feat in features.iter_mut() {
@@ -161,7 +163,7 @@ pub fn run_reroute(
         (clusters, data_points)
     };
     stats.total_clusters = clusters.len();
-    let clusters = algorithms::utils::with_thread_cap(|| {
+    let clusters = algorithms::utils::with_thread_cap(routing_config.hog_cpu, || {
         routing::main(&data_points, clusters, radius, routing_config, &mut stats)
     });
     (centers_collection(&clusters, instance), stats)
@@ -296,6 +298,7 @@ mod tests {
             plugin_args: String::new(),
             workers: 0,
             location_delay_secs: 0.0,
+            hog_cpu: 0,
         };
         let empty = geojson::FeatureCollection {
             bbox: None,
@@ -318,6 +321,7 @@ mod tests {
             plugin_args: String::new(),
             workers: 0,
             location_delay_secs: 0.0,
+            hog_cpu: 0,
         };
         let (coll, stats) = run_reroute(clusters, vec![], 70.0, &routing, "r");
         assert_eq!(stats.total_clusters, 3);
@@ -333,6 +337,7 @@ mod tests {
             plugin_args: String::new(),
             workers: 0,
             location_delay_secs: 0.0,
+            hog_cpu: 0,
         };
         let (_, stats) = run_reroute(vec![], pts, 70.0, &routing, "r");
         assert_eq!(stats.total_clusters, 2);
