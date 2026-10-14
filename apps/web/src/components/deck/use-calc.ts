@@ -13,6 +13,9 @@ import {
 /** Shared localStorage key for the persisted calc panel settings. One global
  *  key (not per-route) so the settings stick across every route edit and the
  *  `/map` playground — mirrors `useLastSeen`'s single-key behavior. */
+/** How often to poll a running calc job when no realtime event has arrived. */
+const JOB_POLL_MS = 2000;
+
 export const CALC_PERSIST_KEY = "koji.map.calc";
 
 interface Job {
@@ -113,7 +116,7 @@ export function useCalc(
 		[persistKey],
 	);
 
-	const resolveTerminal = useCallback(async (id: string) => {
+	const resolveTerminal = useCallback(async (id: string, quiet = false) => {
 		if (resolvedRef.current === id) return;
 		try {
 			const rec = await getJob(id);
@@ -135,7 +138,11 @@ export function useCalc(
 				setJob((j) => j && { ...j, status: "failed" });
 			}
 		} catch (e) {
-			setError(e instanceof Error ? e.message : "failed to fetch job result");
+			// Background polls retry on the next tick; only a foreground fetch
+			// surfaces the failure.
+			if (!quiet) {
+				setError(e instanceof Error ? e.message : "failed to fetch job result");
+			}
 		}
 	}, []);
 
@@ -162,6 +169,22 @@ export function useCalc(
 	// Safety net: fetch once when a job appears (finished-before-subscribe / reload).
 	useEffect(() => {
 		if (jobId) void resolveTerminal(jobId);
+	}, [jobId, resolveTerminal]);
+
+	// Polling fallback. The realtime socket is the fast path, but it is the ONLY
+	// thing that tells the page a job finished: behind a proxy that doesn't
+	// forward WebSocket upgrades (or while the socket is reconnecting) the result
+	// would never appear until a reload. Poll the job record until it is terminal.
+	useEffect(() => {
+		if (!jobId) return;
+		const t = setInterval(() => {
+			if (resolvedRef.current === jobId) {
+				clearInterval(t);
+				return;
+			}
+			void resolveTerminal(jobId, true);
+		}, JOB_POLL_MS);
+		return () => clearInterval(t);
 	}, [jobId, resolveTerminal]);
 
 	const submit = useCallback(async (body: Record<string, unknown>) => {

@@ -161,4 +161,37 @@ describe("useCalc", () => {
 			}),
 		);
 	});
+	// Regression guard for proxies that don't forward the realtime WebSocket: no
+	// event ever arrives, so the result must still show up by polling the job.
+	it("falls back to polling when no realtime event arrives", async () => {
+		vi.useFakeTimers();
+		try {
+			const queued = { ...succeeded({}), status: "Queued", result: null };
+			getJobMock
+				.mockResolvedValueOnce(queued) // safety-net fetch at submit
+				.mockResolvedValueOnce(queued) // first poll
+				.mockResolvedValue(succeeded({ total_clusters: 7 }));
+			const rendered = renderHook(() => useCalc({ mode: "cluster" }));
+			mounted = rendered;
+			const { result } = rendered;
+			await act(async () => {
+				await result.current.run({
+					area: { type: "FeatureCollection", features: [] },
+				});
+			});
+			expect(result.current.result).toBeNull();
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(6500);
+			});
+			expect(result.current.stats).toEqual({ total_clusters: 7 });
+			// Polling stops once resolved.
+			const calls = getJobMock.mock.calls.length;
+			await act(async () => {
+				await vi.advanceTimersByTimeAsync(10_000);
+			});
+			expect(getJobMock.mock.calls.length).toBe(calls);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
