@@ -280,6 +280,13 @@ pub async fn start() -> io::Result<()> {
         .parse()
         .map_err(|e| io::Error::other(format!("invalid PORT {port:?}: {e}")))?;
 
+    // Resolve the session key ONCE, before the per-worker factory below runs.
+    // Calling `session_key()` inside the factory made every worker thread generate
+    // its own random key whenever `KOJI_SESSION_KEY` was unset/short, so a cookie
+    // issued by one worker was rejected by the others (login 'succeeds' but the
+    // next request is 401).
+    let session_key = session_key();
+
     HttpServer::new(move || {
         let client = nominatim_client.clone();
 
@@ -297,7 +304,7 @@ pub async fn start() -> io::Result<()> {
             .wrap(middleware::Logger::new("%s | %r - %b bytes in %D ms (%a)"))
             .wrap(middleware::Compress::default())
             .wrap(
-                SessionMiddleware::builder(CookieSessionStore::default(), session_key())
+                SessionMiddleware::builder(CookieSessionStore::default(), session_key.clone())
                     .cookie_secure(std::env::var("KOJI_INSECURE_COOKIES").is_err())
                     .cookie_http_only(true)
                     .cookie_same_site(actix_web::cookie::SameSite::Lax)
