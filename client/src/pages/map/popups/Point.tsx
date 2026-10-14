@@ -202,6 +202,9 @@ export function PointPopup({ id, lat, lon, type: geoType, dbRef }: Props) {
               save_to_db,
               sort_by,
               routing_args,
+              workers,
+              location_delay,
+              hog_cpu,
             } = usePersist.getState()
             const { setStatic } = useStatic.getState()
             setStatic('loading', { [name]: null })
@@ -225,6 +228,9 @@ export function PointPopup({ id, lat, lon, type: geoType, dbRef }: Props) {
                 save_to_scanner,
                 sort_by,
                 routing_args,
+                workers,
+                location_delay,
+                hog_cpu,
               }),
             }).then((res) => {
               if (res) {

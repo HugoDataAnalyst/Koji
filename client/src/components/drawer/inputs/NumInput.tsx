@@ -17,6 +17,7 @@ export default function UserTextInput<
   disabled = false,
   min,
   max,
+  step,
 }: {
   field: T
   label?: string
@@ -25,6 +26,7 @@ export default function UserTextInput<
   endAdornment?: string
   min?: U extends number ? number : never
   max?: U extends number ? number : never
+  step?: number
 }) {
   const value = usePersist((s) => s[field])
   const isNumber = typeof value === 'number'
@@ -48,7 +50,7 @@ export default function UserTextInput<
         label={isNumber ? undefined : finalLabel}
         sx={{ width: isNumber ? '35%' : '100%' }}
         multiline={!isNumber}
-        inputProps={{ min: min || 0, max: max || 9999 }}
+        inputProps={{ min: min || 0, max: max || 9999, step }}
         InputProps={{ endAdornment }}
         disabled={disabled}
         helperText={helperText}

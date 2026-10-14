@@ -123,6 +123,81 @@ pub fn _debug_clusters(clusters: &HashSet<Cluster>, file_suffix: &str) {
     debug_hashmap(&format!("{}_unique.txt", file_suffix), &unique_map).unwrap();
 }
 
+/// Default CPU ceiling (percent of ALL cores combined) when neither the request
+/// nor `KOJI_HOG_CPU` says otherwise.
+pub const DEFAULT_HOG_CPU: u8 = 90;
+
+/// Resolve the effective `hog_cpu` percentage: the request value if set (1..=100),
+/// else `KOJI_HOG_CPU`, else [`DEFAULT_HOG_CPU`].
+pub fn resolve_hog_cpu(requested: u8) -> u8 {
+    let from_env = || {
+        std::env::var("KOJI_HOG_CPU")
+            .ok()
+            .and_then(|v| v.trim().trim_end_matches('%').parse::<u8>().ok())
+    };
+    let pct = if requested > 0 {
+        requested
+    } else {
+        from_env().unwrap_or(DEFAULT_HOG_CPU)
+    };
+    pct.clamp(1, 100)
+}
+
+/// Busy cores used by everything else on the host, from a ~200 ms sample of
+/// global CPU usage (cached for 3 s so back-to-back jobs don't each wait).
+fn other_busy_cores(cores: usize) -> f64 {
+    use std::sync::Mutex;
+    use std::time::{Duration, Instant};
+    static CACHE: Mutex<Option<(Instant, f64)>> = Mutex::new(None);
+    let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some((at, v)) = *cache {
+        if at.elapsed() < Duration::from_secs(3) {
+            return v;
+        }
+    }
+    let mut sys = sysinfo::System::new();
+    sys.refresh_cpu_usage();
+    std::thread::sleep(sysinfo::MINIMUM_CPU_UPDATE_INTERVAL);
+    sys.refresh_cpu_usage();
+    let busy = sys.global_cpu_usage() as f64 / 100.0 * cores as f64;
+    *cache = Some((Instant::now(), busy));
+    busy
+}
+
+/// Threads a calculation may use so that the whole host stays at or under
+/// `hog_cpu` percent: `floor(cores * pct/100 - other load)`, at least 1.
+/// `100` skips the load probe and uses every core.
+pub fn cpu_budget(hog_cpu: u8) -> usize {
+    let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
+    let pct = hog_cpu.clamp(1, 100);
+    if pct >= 100 {
+        return cores;
+    }
+    let allowed = cores as f64 * pct as f64 / 100.0;
+    let free = allowed - other_busy_cores(cores);
+    let t = (free.floor() as isize).clamp(1, cores as isize) as usize;
+    log::info!("hog_cpu {pct}%: {cores} cores, other load leaves {t} thread(s)");
+    t
+}
+
+/// Run `f` on a rayon pool sized by [`cpu_budget`], so every `par_iter` inside
+/// (clustering, routing) and the TSP solver (which reads the pool size) stay
+/// under the CPU ceiling. `KOJI_CALC_THREADS` additionally caps the thread count.
+pub fn with_thread_cap<R: Send>(hog_cpu: u8, f: impl FnOnce() -> R + Send) -> R {
+    let mut threads = cpu_budget(resolve_hog_cpu(hog_cpu));
+    if let Some(cap) = std::env::var("KOJI_CALC_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|t| *t > 0)
+    {
+        threads = threads.min(cap);
+    }
+    match rayon::ThreadPoolBuilder::new().num_threads(threads).build() {
+        Ok(pool) => pool.install(f),
+        Err(_) => f(),
+    }
+}
+
 pub fn rotate_to_best(clusters: SingleVec, stats: &Stats) -> SingleVec {
     let mut final_clusters = VecDeque::<PointArray>::new();
 

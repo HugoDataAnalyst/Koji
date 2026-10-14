@@ -164,11 +164,28 @@ export default function RoutingTab() {
       <Collapse in={!SORT_BY.some((sort) => sort === sort_by)}>
         <UserTextInput field="route_split_level" min={1} max={12} />
       </Collapse>
-      <Collapse
-        in={!SORT_BY.some((sort) => sort === sort_by) && sort_by !== 'tsp'}
-      >
+      <Collapse in={!SORT_BY.some((sort) => sort === sort_by)}>
         <UserTextInput field="routing_args" helperText="--x 1 --y abc" />
       </Collapse>
+      <UserTextInput
+        field="workers"
+        min={0}
+        helperText="Cut the route into this many equal, compact loops (one per worker). 0 = one route"
+      />
+      <UserTextInput
+        field="location_delay"
+        min={0}
+        step={0.1}
+        endAdornment="s"
+        helperText="Seconds a worker spends per location, for the predicted loop time"
+      />
+      <UserTextInput
+        field="hog_cpu"
+        min={0}
+        max={100}
+        endAdornment="%"
+        helperText="Max CPU for a calculation, % of all cores. 0 = server default"
+      />
 
       <Divider sx={{ my: 2 }} />
       <ListSubheader>Saving</ListSubheader>

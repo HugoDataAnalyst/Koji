@@ -1,5 +1,6 @@
 use std::{collections::HashSet, time::Instant};
 
+use crate::routing::RouteOpts;
 use crate::{routing, stats::Stats};
 
 use geo::{BoundingRect, MultiPolygon, Polygon};
@@ -47,7 +48,13 @@ impl<'a> BootstrapS2<'a> {
         new_bootstrap
     }
 
-    pub fn sort(&mut self, sort_by: &SortBy, route_split_level: u64, routing_args: &str) {
+    pub fn sort(
+        &mut self,
+        sort_by: &SortBy,
+        route_split_level: u64,
+        routing_args: &str,
+        opts: &RouteOpts,
+    ) {
         self.result = routing::main(
             &vec![],
             self.result.clone(),
@@ -56,6 +63,7 @@ impl<'a> BootstrapS2<'a> {
             0.,
             &mut self.stats,
             routing_args,
+            opts,
         );
     }
 

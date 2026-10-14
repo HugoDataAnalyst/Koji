@@ -388,6 +388,25 @@ pub struct Args {
     ///
     /// Default: `false`
     pub genetic_post_processing: Option<bool>,
+    /// Number of consumer workers the route will be cut across. The route is
+    /// built as that many equal-size, compact loops, so slice `i` cut at
+    /// `len*i/workers` is exactly one worker's loop. Also accepted as `segments`.
+    ///
+    /// Default: `0` (one global route)
+    #[serde(alias = "segments")]
+    pub workers: Option<usize>,
+    /// Seconds a worker spends per location (fractions allowed, e.g. `6.8`);
+    /// drives the predicted loop times in the stats' `route_plan`.
+    ///
+    /// Default: `8`
+    #[serde(alias = "locationDelay")]
+    pub location_delay: Option<f64>,
+    /// Max CPU a calculation may use, percent of ALL cores combined (not per
+    /// core): `100`, `90`, `80`, ... Other processes' load is subtracted.
+    ///
+    /// Default: `KOJI_HOG_CPU` env, else `90`
+    #[serde(alias = "hogCpu")]
+    pub hog_cpu: Option<u8>,
 }
 
 pub struct ArgsUnwrapped {
@@ -422,6 +441,9 @@ pub struct ArgsUnwrapped {
     pub bootstrapping_args: String,
     pub center_clusters: bool,
     pub genetic_post_processing: bool,
+    pub workers: usize,
+    pub location_delay: f64,
+    pub hog_cpu: u8,
 }
 
 fn validate_s2_cell(value_to_check: Option<u64>, label: &str) -> u64 {
@@ -496,6 +518,9 @@ impl Args {
             bootstrapping_args,
             center_clusters,
             genetic_post_processing,
+            workers,
+            location_delay,
+            hog_cpu,
         } = self;
         let enum_type = get_enum_by_geometry_string(geometry_type);
         let (area, default_return_type) = if let Some(area) = area {
@@ -562,6 +587,11 @@ impl Args {
         };
         let center_clusters = center_clusters.unwrap_or(false);
         let genetic_post_processing = genetic_post_processing.unwrap_or_default();
+        let workers = workers.unwrap_or(0);
+        let location_delay = location_delay
+            .filter(|d| d.is_finite() && *d > 0.0)
+            .unwrap_or(0.0);
+        let hog_cpu = hog_cpu.unwrap_or(0);
         let clusters = resolve_data_points(clusters);
         let last_seen = last_seen.unwrap_or(0);
         let save_to_db = save_to_db.unwrap_or(false);
@@ -623,6 +653,9 @@ impl Args {
             bootstrapping_args,
             center_clusters,
             genetic_post_processing,
+            workers,
+            location_delay,
+            hog_cpu,
         }
     }
 }

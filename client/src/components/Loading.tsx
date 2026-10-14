@@ -47,6 +47,16 @@ function TimerComponent() {
   )
 }
 
+function formatDuration(secs: number): string {
+  const s = Math.round(secs)
+  const h = Math.floor(s / 3600)
+  const m = Math.floor((s % 3600) / 60)
+  const r = s % 60
+  if (h) return `${h}h ${m}m`
+  if (m) return `${m}m ${r}s`
+  return `${r}s`
+}
+
 export default function Loading() {
   const loading = useStatic((s) => s.loading)
   const loadingAbort = useStatic((s) => s.loadingAbort)
@@ -118,6 +128,15 @@ export default function Loading() {
               <Typography variant="caption">
                 Clustering Time: {value.cluster_time.toFixed(3)}s | Routing
                 Time: {value.route_time.toFixed(3)}s
+              </Typography>
+            )}
+            {value?.route_plan && (
+              <Typography variant="caption" display="block">
+                Predicted loop per worker (
+                {value.route_plan.workers} worker
+                {value.route_plan.workers === 1 ? '' : 's'} @{' '}
+                {value.route_plan.location_delay_secs}s/location):{' '}
+                {formatDuration(value.route_plan.cycle_secs)}
               </Typography>
             )}
           </Grid2>

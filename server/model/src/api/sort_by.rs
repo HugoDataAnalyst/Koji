@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SortBy {
     Unset,
     GeoHash,
@@ -8,23 +8,12 @@ pub enum SortBy {
     Random,
     S2Cell,
     LatLon,
+    /// Built-in TSP solver (replaces the external OR-tools `tsp` plugin).
+    Tsp,
+    /// Built-in TSP solver refining an S2-sorted seed order.
+    TspHybrid,
     Custom(String),
 }
-
-impl PartialEq for SortBy {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (SortBy::Unset, SortBy::Unset) => true,
-            (SortBy::GeoHash, SortBy::GeoHash) => true,
-            (SortBy::PointCount, SortBy::PointCount) => true,
-            (SortBy::Random, SortBy::Random) => true,
-            (SortBy::S2Cell, SortBy::S2Cell) => true,
-            _ => false,
-        }
-    }
-}
-
-impl Eq for SortBy {}
 
 impl<'de> Deserialize<'de> for SortBy {
     fn deserialize<D>(deserializer: D) -> Result<SortBy, D::Error>
@@ -42,8 +31,9 @@ impl<'de> Deserialize<'de> for SortBy {
             "s2" | "s2cell" => Ok(SortBy::S2Cell),
             "latlon" => Ok(SortBy::LatLon),
             "" | "none" | "unset" => Ok(SortBy::Unset),
-            // This is for backwards compatibility since the custom below would end up with a value of "TSP"
-            "tsp" => Ok(SortBy::Custom("tsp".to_string())),
+            // `tsp` used to be the external OR-tools plugin; it is now built in.
+            "tsp" | "optimized" | "2opt" => Ok(SortBy::Tsp),
+            "tsphybrid" | "hybrid" => Ok(SortBy::TspHybrid),
             _ => Ok(SortBy::Custom(s)),
         }
     }

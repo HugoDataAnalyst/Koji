@@ -169,6 +169,13 @@ export interface KojiStats {
   longest_distance: number
   fetch_time: number
   mygod_score: number
+  route_plan?: {
+    workers: number
+    location_delay_secs: number
+    per_worker: { clusters: number; loop_m: number; loop_secs: number }[]
+    cycle_secs: number
+    total_secs: number
+  }
 }
 
 export interface KojiResponse<T = FeatureCollection> {

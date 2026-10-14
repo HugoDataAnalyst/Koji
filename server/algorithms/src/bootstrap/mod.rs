@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use geojson::{Feature, FeatureCollection};
+use crate::routing::RouteOpts;
 use model::api::{Precision, ToFeature, calc_mode::CalculationMode, sort_by::SortBy};
 
 use crate::{
@@ -23,6 +24,7 @@ pub fn main(
     stats: &mut Stats,
     routing_args: &str,
     bootstrapping_rags: &str,
+    opts: &RouteOpts,
 ) -> Vec<Feature> {
     let mut features = vec![];
 
@@ -30,14 +32,14 @@ pub fn main(
         match &calculation_mode {
             CalculationMode::Radius => {
                 let mut new_radius = radius::BootstrapRadius::new(&feature, radius);
-                new_radius.sort(&sort_by, route_split_level, routing_args);
+                new_radius.sort(&sort_by, route_split_level, routing_args, opts);
 
                 *stats += &new_radius.stats;
                 features.push(new_radius.feature());
             }
             CalculationMode::S2 => {
                 let mut new_s2 = s2::BootstrapS2::new(&feature, s2_level, s2_size);
-                new_s2.sort(&sort_by, route_split_level, routing_args);
+                new_s2.sort(&sort_by, route_split_level, routing_args, opts);
 
                 *stats += &new_s2.stats;
                 features.push(new_s2.feature());

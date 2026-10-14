@@ -224,4 +224,6 @@ export const SORT_BY = [
   'Geohash',
   'LatLon',
   'PointCount',
+  'Tsp',
+  'TspHybrid',
 ] as const

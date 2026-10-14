@@ -2,7 +2,7 @@ use crate::utils::{request, response::Response};
 
 use super::*;
 
-use algorithms::{self, clustering, routing, stats::Stats};
+use algorithms::{self, clustering, routing, routing::RouteOpts, stats::Stats};
 use geo::{ChamberlainDuquetteArea, MultiPolygon, Polygon};
 
 use geojson::Value;
@@ -39,6 +39,9 @@ async fn bootstrap(
         route_split_level,
         routing_args,
         bootstrapping_args,
+        workers,
+        location_delay,
+        hog_cpu,
         ..
     } = payload.into_inner().init(Some("bootstrap"));
 
@@ -54,18 +57,31 @@ async fn bootstrap(
 
     let mut stats = Stats::new(format!("Bootstrap | {:?}", calculation_mode), 1);
 
-    let mut features: Vec<Feature> = algorithms::bootstrap::main(
-        area,
-        calculation_mode,
-        radius,
-        sort_by,
-        s2_level,
-        s2_size,
-        route_split_level,
-        &mut stats,
-        &routing_args,
-        &bootstrapping_args,
-    );
+    let route_opts = RouteOpts {
+        workers,
+        location_delay_secs: location_delay,
+    };
+    let (mut features, stats) = web::block(move || {
+        let mut stats = stats;
+        let features: Vec<Feature> = algorithms::utils::with_thread_cap(hog_cpu, || {
+            algorithms::bootstrap::main(
+                area,
+                calculation_mode,
+                radius,
+                sort_by,
+                s2_level,
+                s2_size,
+                route_split_level,
+                &mut stats,
+                &routing_args,
+                &bootstrapping_args,
+                &route_opts,
+            )
+        });
+        (features, stats)
+    })
+    .await
+    .map_err(actix_web::error::ErrorInternalServerError)?;
 
     if parent.is_some() {
         let mut condensed = vec![];
@@ -179,6 +195,9 @@ async fn cluster(
         clustering_args,
         center_clusters,
         genetic_post_processing,
+        workers,
+        location_delay,
+        hog_cpu,
         ..
     } = payload.into_inner().init(Some(&mode));
 
@@ -189,7 +208,7 @@ async fn cluster(
         );
     }
     let sort_by = if mode.eq("route") && sort_by == SortBy::Unset {
-        SortBy::Custom(String::from("tsp"))
+        SortBy::Tsp
     } else {
         sort_by
     };
@@ -235,31 +254,46 @@ async fn cluster(
         data_points.len()
     );
 
-    let clusters = clustering::main(
-        &data_points,
-        cluster_mode,
-        radius,
-        min_points,
-        &mut stats,
-        cluster_split_level,
-        max_clusters,
-        calculation_mode,
-        s2_level,
-        s2_size,
-        area,
-        &clustering_args,
-        center_clusters,
-        genetic_post_processing,
-    );
-    let clusters = routing::main(
-        &data_points,
-        clusters,
-        &sort_by,
-        route_split_level,
-        radius,
-        &mut stats,
-        &routing_args,
-    );
+    // Clustering + routing is CPU-bound rayon work: run it off the async
+    // runtime, on a pool capped by `hog_cpu`.
+    let route_opts = RouteOpts {
+        workers,
+        location_delay_secs: location_delay,
+    };
+    let (clusters, stats) = web::block(move || {
+        let mut stats = stats;
+        let clusters = algorithms::utils::with_thread_cap(hog_cpu, || {
+            let clusters = clustering::main(
+                &data_points,
+                cluster_mode,
+                radius,
+                min_points,
+                &mut stats,
+                cluster_split_level,
+                max_clusters,
+                calculation_mode,
+                s2_level,
+                s2_size,
+                area,
+                &clustering_args,
+                center_clusters,
+                genetic_post_processing,
+            );
+            routing::main(
+                &data_points,
+                clusters,
+                &sort_by,
+                route_split_level,
+                radius,
+                &mut stats,
+                &routing_args,
+                &route_opts,
+            )
+        });
+        (clusters, stats)
+    })
+    .await
+    .map_err(actix_web::error::ErrorInternalServerError)?;
 
     let mut feature = clusters
         .to_feature(Some(enum_type.clone()))
@@ -330,6 +364,9 @@ async fn reroute(payload: web::Json<Args>) -> Result<HttpResponse, Error> {
         sort_by,
         radius,
         routing_args,
+        workers,
+        location_delay,
+        hog_cpu,
         ..
     } = payload.into_inner().init(Some("reroute"));
     let mut stats = Stats::new(String::from("Reroute"), 1);
@@ -342,15 +379,28 @@ async fn reroute(payload: web::Json<Args>) -> Result<HttpResponse, Error> {
     };
     stats.total_clusters = clusters.len();
 
-    let clusters = routing::main(
-        &data_points,
-        clusters,
-        &sort_by,
-        route_split_level,
-        radius,
-        &mut stats,
-        &routing_args,
-    );
+    let route_opts = RouteOpts {
+        workers,
+        location_delay_secs: location_delay,
+    };
+    let (clusters, stats) = web::block(move || {
+        let mut stats = stats;
+        let clusters = algorithms::utils::with_thread_cap(hog_cpu, || {
+            routing::main(
+                &data_points,
+                clusters,
+                &sort_by,
+                route_split_level,
+                radius,
+                &mut stats,
+                &routing_args,
+                &route_opts,
+            )
+        });
+        (clusters, stats)
+    })
+    .await
+    .map_err(actix_web::error::ErrorInternalServerError)?;
 
     let feature = clusters.to_feature(Some(mode.clone())).remove_last_coord();
     let feature = feature.to_collection(Some(instance.clone()), Some(mode));

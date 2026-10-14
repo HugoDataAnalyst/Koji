@@ -66,6 +66,9 @@ export interface UsePersist {
   radius: number | ''
   min_points: number | ''
   route_split_level: number | ''
+  workers: number | ''
+  location_delay: number | ''
+  hog_cpu: number | ''
   cluster_split_level: number | ''
   save_to_db: boolean
   save_to_scanner: boolean
@@ -126,6 +129,9 @@ export const usePersist = create(
       s2FillMode: 'simple',
       radius: 70,
       route_split_level: 0,
+      workers: 0,
+      location_delay: 8,
+      hog_cpu: 0,
       cluster_split_level: 0,
       center_clusters: false,
       // routing_chunk_size: 0,

@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use crate::routing::RouteOpts;
 use crate::{routing, stats::Stats};
 
 use geo::{Contains, Destination, Distance, Extremes, Haversine, Point, Polygon};
@@ -37,7 +38,13 @@ impl<'a> BootstrapRadius<'a> {
         new_bootstrap
     }
 
-    pub fn sort(&mut self, sort_by: &SortBy, route_split_level: u64, routing_args: &str) {
+    pub fn sort(
+        &mut self,
+        sort_by: &SortBy,
+        route_split_level: u64,
+        routing_args: &str,
+        opts: &RouteOpts,
+    ) {
         self.result = routing::main(
             &vec![],
             self.result.clone(),
@@ -46,6 +53,7 @@ impl<'a> BootstrapRadius<'a> {
             self.radius,
             &mut self.stats,
             routing_args,
+            opts,
         );
     }
 
