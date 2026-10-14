@@ -130,7 +130,7 @@ export default function Loading() {
                 Time: {value.route_time.toFixed(3)}s
               </Typography>
             )}
-            {value?.route_plan && (
+            {value && value.route_plan && (
               <Typography variant="caption" display="block">
                 Predicted loop per worker (
                 {value.route_plan.workers} worker
