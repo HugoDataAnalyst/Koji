@@ -52,6 +52,88 @@ fn job_error_to_service(e: JobError) -> ServiceError {
 // POST /jobs — typed, always-async
 // ---------------------------------------------------------------------------
 
+/// Resolve a calc request's async inputs (area, golbat data points) into a
+/// ready-to-run [`CalcPayload`]. Shared by `POST /jobs` and the `/api/v1`
+/// compatibility layer.
+pub(crate) async fn build_calc_payload(
+    conn: &KojiDb,
+    op: &'static str,
+    category: String,
+    calc_request: &crate::requests::CalcRequest,
+) -> Result<CalcPayload, ServiceError> {
+    let inputs = calc_request.enqueue_inputs();
+    let area = area_collection(&inputs.area);
+
+    if area.features.is_empty()
+        && inputs.instance.is_empty()
+        && inputs.data_points.is_empty()
+        && inputs.parent.is_none()
+    {
+        return Err(ServiceError::Invalid {
+            field: Some("area".to_string()),
+            message: "no area, instance, dataPoints, or parent provided".to_string(),
+        });
+    }
+
+    // (async) resolve the area, then the data points within it.
+    let area = utils::create_or_find_collection(
+        &inputs.instance,
+        conn,
+        area,
+        &inputs.parent,
+        &inputs.data_points,
+    )
+    .await?;
+
+    let data_points = if op == "bootstrap" {
+        vec![]
+    } else if op == "reroute" {
+        inputs.data_points
+    } else if inputs.data_points.is_empty() {
+        use koji_golbat::GenericDataToVec;
+        utils::points_from_area(
+            &area,
+            &category,
+            conn,
+            inputs.data_filter.last_seen,
+            inputs.data_filter.tth,
+        )
+        .await?
+        .to_single_vec()
+    } else {
+        inputs.data_points
+    };
+
+    let request = serde_json::to_value(calc_request).map_err(ServiceError::internal)?;
+    Ok(CalcPayload {
+        mode: op.to_string(),
+        category,
+        request,
+        area,
+        data_points,
+        clusters: inputs.clusters,
+    })
+}
+
+/// Compute a calc payload inline (queue bypass). The worker pool is paused for
+/// the duration via `pause_exclusive` so the inline rayon compute doesn't
+/// oversubscribe cores. The pause guard is moved INTO the blocking task, so a
+/// client that aborts mid-request releases it only when the (detached,
+/// un-cancelable) compute actually finishes — never early.
+pub(crate) async fn compute_sync(
+    jobs: &JobQueue,
+    calc_payload: CalcPayload,
+) -> Result<serde_json::Value, ServiceError> {
+    let pause = jobs.pause_exclusive().await;
+    web::block(move || {
+        let _pause = pause;
+        compute_calc(calc_payload)
+    })
+    .await
+    .map_err(|e| ServiceError::internal(format!("calc task failed to run: {e}")))?
+    .map_err(job_error_to_service)
+}
+
 /// `POST /api/v2/jobs` — run a calc. Default (`sync:false`): resolve the area +
 /// data points, build the `CalcPayload`, enqueue HIGH with content dedup →
 /// `202 { job_id }` + a `Location` header. With `sync:true`: compute inline
@@ -80,76 +162,12 @@ async fn create_job(
     let op = body.op();
     let category = body.category;
     let calc_request = body.request;
-
-    let inputs = calc_request.enqueue_inputs();
-    let area = area_collection(&inputs.area);
-
-    if area.features.is_empty()
-        && inputs.instance.is_empty()
-        && inputs.data_points.is_empty()
-        && inputs.parent.is_none()
-    {
-        return Err(ServiceError::Invalid {
-            field: Some("area".to_string()),
-            message: "no area, instance, dataPoints, or parent provided".to_string(),
-        });
-    }
-
-    // (async) resolve the area, then the data points within it.
-    let area = utils::create_or_find_collection(
-        &inputs.instance,
-        &conn,
-        area,
-        &inputs.parent,
-        &inputs.data_points,
-    )
-    .await?;
-
-    let data_points = if op == "bootstrap" {
-        vec![]
-    } else if op == "reroute" {
-        inputs.data_points
-    } else if inputs.data_points.is_empty() {
-        use koji_golbat::GenericDataToVec;
-        utils::points_from_area(
-            &area,
-            &category,
-            &conn,
-            inputs.data_filter.last_seen,
-            inputs.data_filter.tth,
-        )
-        .await?
-        .to_single_vec()
-    } else {
-        inputs.data_points
-    };
-
-    let request = serde_json::to_value(&calc_request).map_err(ServiceError::internal)?;
-    let calc_payload = CalcPayload {
-        mode: op.to_string(),
-        category,
-        request,
-        area,
-        data_points,
-        clusters: inputs.clusters,
-    };
+    let calc_payload = build_calc_payload(&conn, op, category, &calc_request).await?;
 
     // Synchronous bypass (`sync: true`): compute inline and return the result
-    // directly, skipping the queue (no enqueue, no dedup, no job record). The
-    // worker pool is paused for the duration via `pause_exclusive` so the inline
-    // rayon compute doesn't oversubscribe cores. The pause guard is moved INTO the
-    // blocking task, so a client that aborts mid-request releases it only when the
-    // (detached, un-cancelable) compute actually finishes — never early.
+    // directly, skipping the queue (no enqueue, no dedup, no job record).
     if sync {
-        let pause = jobs.pause_exclusive().await;
-        let result = web::block(move || {
-            let _pause = pause;
-            compute_calc(calc_payload)
-        })
-        .await
-        .map_err(|e| ServiceError::internal(format!("calc task failed to run: {e}")))?
-        .map_err(job_error_to_service)?;
-        return Ok(ApiResponse::success(result));
+        return Ok(ApiResponse::success(compute_sync(&jobs, calc_payload).await?));
     }
 
     let key = dedup_key(

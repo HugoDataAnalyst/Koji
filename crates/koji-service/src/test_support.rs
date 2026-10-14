@@ -28,6 +28,12 @@ pub fn v2_geometry_scope() -> actix_web::Scope {
     public::v2::geometry::scope()
 }
 
+/// The legacy `/api/v1` scope (its calc routes need a DB; the rest do not).
+#[doc(hidden)]
+pub fn v1_scope() -> actix_web::Scope {
+    public::v1::scope()
+}
+
 /// The `/s2` scope (circle-coverage / cell-coverage / polygons / {level}). No DB.
 #[doc(hidden)]
 pub fn v2_s2_scope() -> actix_web::Scope {

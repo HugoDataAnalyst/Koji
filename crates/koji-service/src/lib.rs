@@ -338,6 +338,12 @@ pub async fn start() -> io::Result<()> {
                             .service(public::v2::nominatim::search_nominatim)
                             // Session auth: login/logout/me.
                             .service(public::v2::auth::scope()),
+                    )
+                    // Legacy `/api/v1` compatibility layer over the v2 compute
+                    // paths (same auth as v2).
+                    .service(
+                        public::v1::scope()
+                            .wrap(HttpAuthentication::with_fn(auth::public_validator)),
                     ),
             )
             // `/internal` scope: same handlers as `/api/v2` (forward-aliases) +
