@@ -42,3 +42,7 @@ Documentation for this project can be found [here](https://koji.vercel.app/)
 - `KOJI_SEG_MS_PER_POINT` (default 0.3): per-segment solver budget.
 - `routebench` (`cargo run --release -p algorithms --bin routebench -- --csv pts.csv --workers 15`)
   reports route time and slice loop length / span.
+- `routing.jumpSecs` (default 6.8): observed average seconds a worker spends per
+  cluster. The stats now carry `route_plan` — per-worker cluster count, loop
+  length and predicted loop time (`clusters × jumpSecs`), plus `cycle_secs`
+  (slowest worker = the revisit period) and `total_secs`.

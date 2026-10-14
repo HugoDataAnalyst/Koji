@@ -16,7 +16,7 @@ mod sort_by;
 pub mod sorting;
 mod tsp;
 
-pub use config::RoutingConfig;
+pub use config::{DEFAULT_JUMP_SECS, RoutingConfig};
 pub use sort_by::SortBy;
 
 pub fn main(
@@ -34,6 +34,7 @@ pub fn main(
         let clusters = segments::route(clusters, cfg.workers, &cfg.sort_by);
         stats.set_route_time(route_time);
         stats.distance_stats(&clusters);
+        stats.plan_route(&clusters, cfg.workers, jump_secs(cfg));
         return clusters;
     }
     let clusters = match &cfg.sort_by {
@@ -78,8 +79,17 @@ pub fn main(
 
     stats.set_route_time(route_time);
     stats.distance_stats(&clusters);
+    stats.plan_route(&clusters, cfg.workers, jump_secs(cfg));
 
     clusters
+}
+
+fn jump_secs(cfg: &RoutingConfig) -> Precision {
+    if cfg.jump_secs > 0.0 {
+        cfg.jump_secs
+    } else {
+        DEFAULT_JUMP_SECS
+    }
 }
 
 #[cfg(feature = "native")]
@@ -113,6 +123,7 @@ mod tests {
             sort_by,
             plugin_args: String::new(),
             workers: 0,
+            jump_secs: 0.0,
         }
     }
 

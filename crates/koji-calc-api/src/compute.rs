@@ -295,6 +295,7 @@ mod tests {
             sort_by: SortBy::Random,
             plugin_args: String::new(),
             workers: 0,
+            jump_secs: 0.0,
         };
         let empty = geojson::FeatureCollection {
             bbox: None,
@@ -316,6 +317,7 @@ mod tests {
             sort_by: SortBy::Random,
             plugin_args: String::new(),
             workers: 0,
+            jump_secs: 0.0,
         };
         let (coll, stats) = run_reroute(clusters, vec![], 70.0, &routing, "r");
         assert_eq!(stats.total_clusters, 3);
@@ -330,6 +332,7 @@ mod tests {
             sort_by: SortBy::Random,
             plugin_args: String::new(),
             workers: 0,
+            jump_secs: 0.0,
         };
         let (_, stats) = run_reroute(vec![], pts, 70.0, &routing, "r");
         assert_eq!(stats.total_clusters, 2);

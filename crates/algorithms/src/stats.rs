@@ -84,6 +84,32 @@ pub fn compose_score_v2(
     c.cluster_cost + c.uncovered_cost + extra.round().max(0.0) as usize
 }
 
+/// One worker's share of a route cut into equal slices.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct WorkerPlan {
+    /// Clusters (jumps) in this worker's slice.
+    pub clusters: usize,
+    /// Closed-loop length of the slice in metres (informational: the per-jump
+    /// time below is an observed average that already includes travel).
+    pub loop_m: Precision,
+    /// Predicted time for one full loop of the slice: `clusters * jump_secs`.
+    pub loop_secs: Precision,
+}
+
+/// Predicted schedule for the route when consumed by `workers` workers, each
+/// looping an equal slice cut at `len*i/workers`.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RoutePlan {
+    pub workers: usize,
+    /// Average seconds a worker spends per cluster (jump + scan).
+    pub jump_secs: Precision,
+    pub per_worker: Vec<WorkerPlan>,
+    /// Longest worker loop = how often the slowest part of the area is revisited.
+    pub cycle_secs: Precision,
+    /// Sum of all worker loops (total worker-seconds per cycle).
+    pub total_secs: Precision,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Stats {
     // Skipped on the wire (not part of the stats contract) AND on read — they
@@ -122,6 +148,8 @@ pub struct Stats {
     #[serde(default)]
     pub score_components: ScoreComponents,
     pub cluster_stats: ClusterStats,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub route_plan: Option<RoutePlan>,
 }
 
 impl Stats {
@@ -146,6 +174,7 @@ impl Stats {
             label,
             min_points,
             cluster_stats: ClusterStats::new(),
+            route_plan: None,
         }
     }
 
@@ -197,6 +226,36 @@ impl Stats {
             self.stats_start_time.unwrap().elapsed().as_secs_f32()
         );
         self.stop_timer();
+    }
+
+    /// Predict per-worker loop times for `clusters` cut into `workers` equal
+    /// slices (`workers` < 1 is treated as one worker).
+    pub fn plan_route(&mut self, clusters: &SingleVec, workers: usize, jump_secs: Precision) {
+        let w = workers.max(1);
+        let n = clusters.len();
+        let per_worker: Vec<WorkerPlan> = (0..w)
+            .map(|i| {
+                let s = &clusters[n * i / w..n * (i + 1) / w];
+                let loop_m = (0..s.len())
+                    .map(|j| {
+                        let (a, b) = (s[j], s[(j + 1) % s.len()]);
+                        Haversine.distance(Point::new(a[1], a[0]), Point::new(b[1], b[0]))
+                    })
+                    .sum();
+                WorkerPlan {
+                    clusters: s.len(),
+                    loop_m,
+                    loop_secs: s.len() as Precision * jump_secs,
+                }
+            })
+            .collect();
+        self.route_plan = Some(RoutePlan {
+            workers: w,
+            jump_secs,
+            cycle_secs: per_worker.iter().map(|p| p.loop_secs).fold(0., Precision::max),
+            total_secs: per_worker.iter().map(|p| p.loop_secs).sum(),
+            per_worker,
+        });
     }
 
     pub fn set_cluster_time(&mut self, time: Instant) {
@@ -447,6 +506,9 @@ impl<'a> AddAssign<&'a Self> for Stats {
         }
         self.cluster_time += rhs.cluster_time;
         self.route_time += rhs.route_time;
+        if self.route_plan.is_none() {
+            self.route_plan = rhs.route_plan.clone();
+        }
         self.stats_time += rhs.stats_time;
         self.total_points += rhs.total_points;
         self.points_covered += rhs.points_covered;
