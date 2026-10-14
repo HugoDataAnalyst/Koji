@@ -13,6 +13,10 @@
 //!   re-shaped to the requested legacy `return_type` inside the v1 envelope.
 //! - **convert** (`/convert/...`), **s2** (`/s2/...`), `/health`, `/info`: same
 //!   bodies as v1, backed by the v2 geometry / S2 helpers.
+//! - **geofence / route reads** (`/geofence/{all,reference,area,{rt}[/{project}]}`,
+//!   `/route/{all,area,{rt}}`, `DELETE /geofence/{id}`): backed by the v2 `koji-db`
+//!   reads. The write/push endpoints (`save-koji`, `save-scanner`, `push`) answer
+//!   `501` pointing at their `/api/v2` replacement.
 //!
 //! Auth is the same `public_validator` as `/api/v2`. The new routing options
 //! (`workers`, `location_delay`, `hog_cpu`) are accepted here too.
@@ -25,7 +29,7 @@
 //! `instance` / `parent` name; the legacy bare-array/text area shapes are not
 //! supported.
 
-use actix_web::{HttpResponse, ResponseError, get, http::StatusCode, post, web};
+use actix_web::{HttpResponse, ResponseError, delete, get, http::StatusCode, post, web};
 use geojson::{Feature, FeatureCollection, GeometryValue};
 use koji_core::{Precision, UnknownId};
 use koji_db::KojiDb;
@@ -721,6 +725,174 @@ async fn s2_cells(payload: web::Json<koji_core::BoundsArg>, url: web::Path<u8>) 
     v1_ok(json!(cells), None)
 }
 
+// ── /geofence, /route, /project ─────────────────────────────────────────────
+
+use koji_db::db::{geofence, route};
+use koji_db::query_args::ApiQueryArgs;
+
+fn model_err(e: koji_db::ModelError) -> HttpResponse {
+    service_err(ServiceError::from(e))
+}
+
+fn not_supported(what: &str, instead: &str) -> HttpResponse {
+    v1_err(
+        StatusCode::NOT_IMPLEMENTED,
+        &format!("{what} is not available on /api/v1; use {instead}"),
+    )
+}
+
+/// `rt` from the path/`?rt=` -> the v1 default for a FeatureCollection read.
+fn read_rt(name: &str) -> ReturnTypeArg {
+    get_return_type(name, &ReturnTypeArg::FeatureCollection)
+}
+
+fn shaped(coll: koji_core::KojiGeometryCollection, rt: ReturnTypeArg) -> HttpResponse {
+    v1_ok(response_body(&coll, rt), None)
+}
+
+#[get("/all")]
+async fn geofence_all(conn: web::Data<KojiDb>) -> HttpResponse {
+    match geofence::Query::get_all_koji(&conn.koji).await {
+        Ok(c) => shaped(c, ReturnTypeArg::FeatureCollection),
+        Err(e) => model_err(e),
+    }
+}
+
+#[get("/reference")]
+async fn geofence_reference(conn: web::Data<KojiDb>) -> HttpResponse {
+    match geofence::Query::get_all(&conn.koji).await {
+        Ok(rows) => v1_ok(
+            json!(
+                rows.into_iter()
+                    .map(|m| json!({"id": m.id, "name": m.name, "mode": m.mode, "parent": m.parent}))
+                    .collect::<Vec<_>>()
+            ),
+            None,
+        ),
+        Err(e) => service_err(e.into()),
+    }
+}
+
+#[get("/reference/{project}")]
+async fn geofence_reference_project(
+    conn: web::Data<KojiDb>,
+    project: web::Path<String>,
+) -> HttpResponse {
+    match geofence::Query::by_project(&conn.koji, project.into_inner()).await {
+        Ok(rows) => v1_ok(json!(rows), None),
+        Err(e) => service_err(e.into()),
+    }
+}
+
+#[get("/area/{geofence}")]
+async fn geofence_area(
+    conn: web::Data<KojiDb>,
+    id: web::Path<String>,
+    args: web::Query<ApiQueryArgs>,
+) -> HttpResponse {
+    let rt = read_rt(args.rt.as_deref().unwrap_or("feature"));
+    match geofence::Query::get_one_koji(&conn.koji, id.into_inner()).await {
+        Ok(kg) => shaped(koji_core::KojiGeometryCollection::new(vec![kg]), rt),
+        Err(e) => model_err(e),
+    }
+}
+
+#[delete("/{id}")]
+async fn geofence_remove(conn: web::Data<KojiDb>, id: web::Path<u32>) -> HttpResponse {
+    match geofence::Query::delete(&conn.koji, id.into_inner()).await {
+        Ok(r) => v1_ok(json!(r.rows_affected), None),
+        Err(e) => service_err(e.into()),
+    }
+}
+
+#[post("/save-koji")]
+async fn geofence_save_koji() -> HttpResponse {
+    not_supported("geofence save-koji", "POST /api/v2/geofences")
+}
+
+#[post("/save-scanner")]
+async fn geofence_save_scanner() -> HttpResponse {
+    not_supported("geofence save-scanner", "POST /api/v2/geofences/{id}/publish")
+}
+
+#[get("/push/{id}")]
+async fn geofence_push() -> HttpResponse {
+    not_supported("geofence push", "POST /api/v2/geofences/{id}/publish")
+}
+
+#[get("/{return_type}")]
+async fn geofence_return_type(
+    conn: web::Data<KojiDb>,
+    rt: web::Path<String>,
+) -> HttpResponse {
+    match geofence::Query::get_all_koji(&conn.koji).await {
+        Ok(c) => shaped(c, read_rt(&rt.into_inner())),
+        Err(e) => model_err(e),
+    }
+}
+
+#[get("/{return_type}/{project}")]
+async fn geofence_project(
+    conn: web::Data<KojiDb>,
+    url: web::Path<(String, String)>,
+    args: web::Query<ApiQueryArgs>,
+) -> HttpResponse {
+    let (rt, project) = url.into_inner();
+    match geofence::Query::project_as_koji(&conn.koji, project, &args).await {
+        Ok(c) => shaped(c, read_rt(&rt)),
+        Err(e) => model_err(e),
+    }
+}
+
+#[get("/all")]
+async fn route_all(conn: web::Data<KojiDb>) -> HttpResponse {
+    match route::Query::as_koji_collection(&conn.koji).await {
+        Ok(c) => shaped(c, ReturnTypeArg::FeatureCollection),
+        Err(e) => model_err(e),
+    }
+}
+
+#[get("/area/{id}")]
+async fn route_area(
+    conn: web::Data<KojiDb>,
+    id: web::Path<String>,
+    args: web::Query<ApiQueryArgs>,
+) -> HttpResponse {
+    let rt = read_rt(args.rt.as_deref().unwrap_or("feature"));
+    match route::Query::get_one_koji(&conn.koji, id.into_inner()).await {
+        Ok(kg) => shaped(koji_core::KojiGeometryCollection::new(vec![kg]), rt),
+        Err(e) => model_err(e),
+    }
+}
+
+#[post("/save-koji")]
+async fn route_save_koji() -> HttpResponse {
+    not_supported("route save-koji", "POST /api/v2/routes")
+}
+
+#[get("/push/{id}")]
+async fn route_push() -> HttpResponse {
+    not_supported("route push", "the /api/v2/routes publish endpoints")
+}
+
+#[get("/reference")]
+async fn route_reference() -> HttpResponse {
+    not_supported("route reference", "GET /api/v2/routes")
+}
+
+#[get("/{return_type}")]
+async fn route_return_type(conn: web::Data<KojiDb>, rt: web::Path<String>) -> HttpResponse {
+    match route::Query::as_koji_collection(&conn.koji).await {
+        Ok(c) => shaped(c, read_rt(&rt.into_inner())),
+        Err(e) => model_err(e),
+    }
+}
+
+#[get("/push/{id}")]
+async fn project_push() -> HttpResponse {
+    not_supported("project push", "the /api/v2/projects endpoints")
+}
+
 // ── /health, /info ──────────────────────────────────────────────────────────
 
 #[get("/health")]
@@ -764,6 +936,29 @@ pub(crate) fn scope() -> actix_web::Scope {
                 .service(cell_polygons)
                 .service(s2_cells),
         )
+        .service(
+            web::scope("/geofence")
+                .service(geofence_all)
+                .service(geofence_reference)
+                .service(geofence_reference_project)
+                .service(geofence_save_koji)
+                .service(geofence_save_scanner)
+                .service(geofence_remove)
+                .service(geofence_push)
+                .service(geofence_area)
+                .service(geofence_return_type)
+                .service(geofence_project),
+        )
+        .service(
+            web::scope("/route")
+                .service(route_all)
+                .service(route_reference)
+                .service(route_save_koji)
+                .service(route_push)
+                .service(route_area)
+                .service(route_return_type),
+        )
+        .service(web::scope("/project").service(project_push))
         .service(web::scope("/info").service(info))
 }
 

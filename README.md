@@ -53,3 +53,21 @@ Documentation for this project can be found [here](https://koji.vercel.app/)
   per-worker cluster count, loop length and predicted loop time
   (`clusters × locationDelay`), plus `cycle_secs` (slowest worker = the revisit
   period) and `total_secs`.
+
+## `/api/v1` compatibility
+
+`main`'s `/api/v1` is served again as a translation layer over the v2 compute
+paths (same bearer/session auth as `/api/v2`):
+
+| Works | Notes |
+|---|---|
+| `POST /api/v1/calc/{cluster\|route}/{category}`, `/calc/bootstrap`, `/calc/reroute`, `/calc/route-stats[/{category}]`, `/calc/area` | flat snake_case `Args` bodies, `{message,status,status_code,data,stats}` envelope, legacy `return_type` shapes. Also accepts `workers`, `location_delay`, `hog_cpu`. |
+| `POST /api/v1/convert/{data,simplify,merge-points}`, `/api/v1/s2/*`, `GET /api/v1/health`, `GET /api/v1/info/` | same bodies as v1 |
+| `GET /api/v1/geofence/{all,reference,reference/{project},area/{id},{rt},{rt}/{project}}`, `DELETE /api/v1/geofence/{id}`, `GET /api/v1/route/{all,area/{id},{rt}}` | reads via the v2 db layer |
+
+Differences: `save_to_db` / `save_to_scanner(_only)` on calc are rejected with 400
+(v2 calc is pure compute); `save-koji`, `save-scanner`, `push/*` and
+`route/reference` answer 501 pointing at their `/api/v2` equivalent;
+`route_split_level` / `cluster_split_level` are ignored; `area` must be GeoJSON
+(or an `instance` / `parent`), not the legacy bare-array/text shapes; name-modifier
+query args apply to `/geofence/{rt}/{project}` only.
