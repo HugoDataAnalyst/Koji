@@ -45,6 +45,29 @@ pub fn info_log(file_name: &str, message: String) -> String {
     )
 }
 
+/// Run `f` on a rayon pool capped at `KOJI_CALC_THREADS` (default min(cores, 8)),
+/// so one calculation cannot saturate every core of a shared host. Every
+/// `par_iter` inside `f` (clustering, routing) runs on that pool. A no-op on
+/// wasm, where the pool is owned by the host runtime.
+#[cfg(feature = "native")]
+pub fn with_thread_cap<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    let cores = std::thread::available_parallelism().map_or(1, |c| c.get());
+    let threads = std::env::var("KOJI_CALC_THREADS")
+        .ok()
+        .and_then(|v| v.trim().parse::<usize>().ok())
+        .filter(|t| *t > 0)
+        .unwrap_or(cores.min(8));
+    match rayon::ThreadPoolBuilder::new().num_threads(threads).build() {
+        Ok(pool) => pool.install(f),
+        Err(_) => f(),
+    }
+}
+
+#[cfg(not(feature = "native"))]
+pub fn with_thread_cap<R: Send>(f: impl FnOnce() -> R + Send) -> R {
+    f()
+}
+
 pub fn rotate_to_best(clusters: SingleVec, stats: &Stats) -> SingleVec {
     let mut final_clusters = VecDeque::<PointArray>::new();
 

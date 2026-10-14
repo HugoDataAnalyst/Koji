@@ -84,6 +84,7 @@ fn route(clusters: &SingleVec, sort_by: SortBy) -> (SingleVec, std::time::Durati
     let cfg = RoutingConfig {
         sort_by,
         plugin_args: String::new(),
+        workers: 0,
     };
     let mut stats = Stats::new("route".to_string(), 1);
     let t = Instant::now();

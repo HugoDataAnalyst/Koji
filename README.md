@@ -26,3 +26,19 @@ Clustering, routing, and bootstrap all run entirely client-side via WebAssembly 
 ## Docs
 
 Documentation for this project can be found [here](https://koji.vercel.app/)
+
+## Worker-aware routing and CPU limits
+
+- `routing.workers` (alias `segments`, default off): when the route's consumer
+  splits it across N workers, set `workers: N`. The route is built as N
+  equal-size (±1), spatially compact closed loops chained end-to-start, so
+  slice `i` cut at `len*i/N` is exactly one worker's loop. The response shape is
+  unchanged. On ~5k clusters / 15 workers this routes in ~0.35 s (vs ~5 s) with
+  ~35% tighter slices.
+- `KOJI_CALC_THREADS` (default `min(cores, 8)`): rayon threads per calculation.
+- `KOJI_TSP_THREADS` (default `min(cores, 4)`), `KOJI_TSP_MAX_SECS` (default 20):
+  caps for the global TSP solve, whose budget is now 0.2 ms/point (it used to be
+  1 ms/point on every core with no quality gain past ~0.1 ms/point).
+- `KOJI_SEG_MS_PER_POINT` (default 1): per-segment solver budget.
+- `routebench` (`cargo run --release -p algorithms --bin routebench -- --csv pts.csv --workers 15`)
+  reports route time and slice loop length / span.

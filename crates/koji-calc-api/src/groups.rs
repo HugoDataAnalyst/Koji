@@ -67,6 +67,10 @@ pub struct RoutingArgs {
     #[cfg_attr(feature = "schema", schema(value_type = Option<String>))]
     pub sort_by: Option<SortBy>,
     pub plugin_args: Option<String>,
+    /// Split the route into this many equal, compact slices (one per consumer
+    /// worker). Unset/`0`/`1` keeps the single global route.
+    #[serde(alias = "segments")]
+    pub workers: Option<usize>,
 }
 
 impl RoutingArgs {
@@ -74,6 +78,7 @@ impl RoutingArgs {
         RoutingConfig {
             sort_by: self.sort_by.unwrap_or(SortBy::Unset),
             plugin_args: self.plugin_args.unwrap_or_default(),
+            workers: self.workers.unwrap_or(0),
         }
     }
 }

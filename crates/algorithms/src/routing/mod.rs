@@ -11,6 +11,7 @@ use crate::plugins;
 use crate::{stats::Stats, utils};
 
 mod config;
+mod segments;
 mod sort_by;
 pub mod sorting;
 mod tsp;
@@ -26,14 +27,29 @@ pub fn main(
     stats: &mut Stats,
 ) -> SingleVec {
     let route_time = Instant::now();
+    // Worker-aware mode: the consumer cuts the route into `workers` equal
+    // slices, so build it as that many compact loops. The slice boundaries are
+    // meaningful, so the global "rotate to best" below must not shift them.
+    if cfg.workers > 1 && clusters.len() >= 2 * cfg.workers {
+        let clusters = segments::route(clusters, cfg.workers, &cfg.sort_by);
+        stats.set_route_time(route_time);
+        stats.distance_stats(&clusters);
+        return clusters;
+    }
     let clusters = match &cfg.sort_by {
         SortBy::PointCount => sort_point_count(clusters, data_points, radius),
         SortBy::LatLon => sort_lat_lng(clusters),
         SortBy::GeoHash => sort_geohash(clusters),
         SortBy::S2Cell => sort_s2(clusters),
         SortBy::Random => sort_random(clusters),
-        SortBy::Tsp => tsp::solve(clusters),
-        SortBy::TspHybrid => tsp::refine(sort_s2(clusters)),
+        SortBy::Tsp => {
+            let budget = tsp::Budget::global(clusters.len());
+            tsp::solve(clusters, budget)
+        }
+        SortBy::TspHybrid => {
+            let budget = tsp::Budget::global(clusters.len());
+            tsp::refine(sort_s2(clusters), budget)
+        }
         SortBy::Unset => clusters,
         #[cfg(feature = "native")]
         SortBy::Custom(plugin) => {
@@ -96,6 +112,7 @@ mod tests {
         RoutingConfig {
             sort_by,
             plugin_args: String::new(),
+            workers: 0,
         }
     }
 

@@ -57,14 +57,16 @@ pub fn run_cluster_route(
         clustering_config.min_points,
     );
 
-    let clusters = clustering::main(data_points, clustering_config, area, &mut stats);
-    let clusters = routing::main(
-        data_points,
-        clusters,
-        clustering_config.radius,
-        routing_config,
-        &mut stats,
-    );
+    let clusters = algorithms::utils::with_thread_cap(|| {
+        let clusters = clustering::main(data_points, clustering_config, area, &mut stats);
+        routing::main(
+            data_points,
+            clusters,
+            clustering_config.radius,
+            routing_config,
+            &mut stats,
+        )
+    });
 
     (centers_collection(&clusters, instance), stats)
 }
@@ -159,7 +161,9 @@ pub fn run_reroute(
         (clusters, data_points)
     };
     stats.total_clusters = clusters.len();
-    let clusters = routing::main(&data_points, clusters, radius, routing_config, &mut stats);
+    let clusters = algorithms::utils::with_thread_cap(|| {
+        routing::main(&data_points, clusters, radius, routing_config, &mut stats)
+    });
     (centers_collection(&clusters, instance), stats)
 }
 
@@ -290,6 +294,7 @@ mod tests {
         let routing = RoutingConfig {
             sort_by: SortBy::Random,
             plugin_args: String::new(),
+            workers: 0,
         };
         let empty = geojson::FeatureCollection {
             bbox: None,
@@ -310,6 +315,7 @@ mod tests {
         let routing = RoutingConfig {
             sort_by: SortBy::Random,
             plugin_args: String::new(),
+            workers: 0,
         };
         let (coll, stats) = run_reroute(clusters, vec![], 70.0, &routing, "r");
         assert_eq!(stats.total_clusters, 3);
@@ -323,6 +329,7 @@ mod tests {
         let routing = RoutingConfig {
             sort_by: SortBy::Random,
             plugin_args: String::new(),
+            workers: 0,
         };
         let (_, stats) = run_reroute(vec![], pts, 70.0, &routing, "r");
         assert_eq!(stats.total_clusters, 2);
