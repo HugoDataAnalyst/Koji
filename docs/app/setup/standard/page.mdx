@@ -123,8 +123,8 @@ pm2 start koji # from the /server folder
 # pull latest
 git pull
 
-# recompile OR-Tools
-./or-tools/install.sh
+# (OR-Tools is only needed if you still use the legacy OR-Tools plugin)
+# ./or-tools/install.sh
 
 # recompile client
 cd client && yarn install && yarn build

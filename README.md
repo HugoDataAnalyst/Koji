@@ -50,3 +50,29 @@ Documentation for this project can be found [here](https://koji.vercel.app/)
   clusters than `balanced`. `fastest`, `fast`, `balanced`, `honeycomb` and the S2 mode
   behave as before (they share the new candidate generator/selector). `max_clusters`
   keeps the best-coverage subset instead of the first N.
+
+### Install and run (this branch)
+
+The layout and commands are the same as upstream `main`, with one step removed:
+
+```bash
+git clone -b perf/main-routing https://github.com/HugoDataAnalyst/Koji.git
+cd Koji
+cd server && cp .env.example .env     # edit SCANNER_DB_URL, KOJI_DB_URL, KOJI_SECRET, ...
+cd ../client && yarn install && yarn build
+cd ../server && cargo install --path . --force   # needs Rust 1.88+
+koji                                    # or `cargo run --release` from /server
+```
+
+- **No OR-tools step.** `sudo chmod +x or-tools/install.sh && ./or-tools/install.sh` is no
+  longer needed; `tsp`/`tsphybrid` are built in. Only run it if you still use the legacy
+  OR-tools plugin (the Docker image still builds it; the native solver takes precedence).
+- **No database migrations.** The schema is identical to upstream `main`, so you can switch
+  an existing Kōji database between this branch and `main` without migrating.
+- **Rust 1.88 or newer** (a dependency requires it). `rustup update stable` if the build
+  complains about the compiler version.
+- **New optional settings:** `KOJI_HOG_CPU`, `KOJI_CALC_THREADS`, `KOJI_TSP_THREADS`,
+  `KOJI_TSP_MAX_SECS`, `KOJI_SEG_MS_PER_POINT` (see above) and the per-request
+  `workers`, `location_delay` and `hog_cpu` fields.
+- **Updating:** `git pull`, rebuild the client and server as above, restart (PM2:
+  `pm2 restart koji`).
