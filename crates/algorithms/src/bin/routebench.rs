@@ -68,7 +68,7 @@ fn main() {
         sort_by: SortBy::from_str_opt(&sort).expect("sort"),
         plugin_args: String::new(),
         workers,
-        jump_secs: arg("--jump-secs").map_or(0.0, |v| v.parse().unwrap()),
+        location_delay_secs: arg("--location-delay").map_or(0.0, |v| v.parse().unwrap()),
     };
     let t = Instant::now();
     let route = routing::main(&points, clusters.clone(), radius, &rcfg, &mut stats);
@@ -97,7 +97,7 @@ fn main() {
     }
     if let Some(plan) = &stats.route_plan {
         let loops: Vec<String> = plan.per_worker.iter().map(|w| format!("{:.0}", w.loop_secs)).collect();
-        println!("PLAN workers={} jump_s={} cycle_s={:.0} ({:.1} min) total_worker_s={:.0} loops_s=[{}]", plan.workers, plan.jump_secs, plan.cycle_secs, plan.cycle_secs / 60.0, plan.total_secs, loops.join(","));
+        println!("PLAN workers={} delay_s={} cycle_s={:.0} ({:.1} min) total_worker_s={:.0} loops_s=[{}]", plan.workers, plan.location_delay_secs, plan.cycle_secs, plan.cycle_secs / 60.0, plan.total_secs, loops.join(","));
     }
     println!(
         "RESULT points={} clusters={n} radius={radius} sort={sort} workers={workers} cluster_s={cluster_s:.2} route_s={route_s:.2} global_loop_m={:.0} slice_loop_m={loop_sum:.0} slice_max_span_m={max_span:.0} slice_len={min_len}..{max_len}",

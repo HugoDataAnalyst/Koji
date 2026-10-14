@@ -92,7 +92,7 @@ pub struct WorkerPlan {
     /// Closed-loop length of the slice in metres (informational: the per-jump
     /// time below is an observed average that already includes travel).
     pub loop_m: Precision,
-    /// Predicted time for one full loop of the slice: `clusters * jump_secs`.
+    /// Predicted time for one full loop of the slice: `clusters * location_delay_secs`.
     pub loop_secs: Precision,
 }
 
@@ -102,7 +102,7 @@ pub struct WorkerPlan {
 pub struct RoutePlan {
     pub workers: usize,
     /// Average seconds a worker spends per cluster (jump + scan).
-    pub jump_secs: Precision,
+    pub location_delay_secs: Precision,
     pub per_worker: Vec<WorkerPlan>,
     /// Longest worker loop = how often the slowest part of the area is revisited.
     pub cycle_secs: Precision,
@@ -230,7 +230,7 @@ impl Stats {
 
     /// Predict per-worker loop times for `clusters` cut into `workers` equal
     /// slices (`workers` < 1 is treated as one worker).
-    pub fn plan_route(&mut self, clusters: &SingleVec, workers: usize, jump_secs: Precision) {
+    pub fn plan_route(&mut self, clusters: &SingleVec, workers: usize, location_delay_secs: Precision) {
         let w = workers.max(1);
         let n = clusters.len();
         let per_worker: Vec<WorkerPlan> = (0..w)
@@ -245,13 +245,13 @@ impl Stats {
                 WorkerPlan {
                     clusters: s.len(),
                     loop_m,
-                    loop_secs: s.len() as Precision * jump_secs,
+                    loop_secs: s.len() as Precision * location_delay_secs,
                 }
             })
             .collect();
         self.route_plan = Some(RoutePlan {
             workers: w,
-            jump_secs,
+            location_delay_secs,
             cycle_secs: per_worker.iter().map(|p| p.loop_secs).fold(0., Precision::max),
             total_secs: per_worker.iter().map(|p| p.loop_secs).sum(),
             per_worker,

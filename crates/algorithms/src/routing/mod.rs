@@ -16,7 +16,7 @@ mod sort_by;
 pub mod sorting;
 mod tsp;
 
-pub use config::{DEFAULT_JUMP_SECS, RoutingConfig};
+pub use config::{DEFAULT_LOCATION_DELAY_SECS, RoutingConfig};
 pub use sort_by::SortBy;
 
 pub fn main(
@@ -34,7 +34,7 @@ pub fn main(
         let clusters = segments::route(clusters, cfg.workers, &cfg.sort_by);
         stats.set_route_time(route_time);
         stats.distance_stats(&clusters);
-        stats.plan_route(&clusters, cfg.workers, jump_secs(cfg));
+        stats.plan_route(&clusters, cfg.workers, location_delay_secs(cfg));
         return clusters;
     }
     let clusters = match &cfg.sort_by {
@@ -79,16 +79,16 @@ pub fn main(
 
     stats.set_route_time(route_time);
     stats.distance_stats(&clusters);
-    stats.plan_route(&clusters, cfg.workers, jump_secs(cfg));
+    stats.plan_route(&clusters, cfg.workers, location_delay_secs(cfg));
 
     clusters
 }
 
-fn jump_secs(cfg: &RoutingConfig) -> Precision {
-    if cfg.jump_secs > 0.0 {
-        cfg.jump_secs
+fn location_delay_secs(cfg: &RoutingConfig) -> Precision {
+    if cfg.location_delay_secs > 0.0 {
+        cfg.location_delay_secs
     } else {
-        DEFAULT_JUMP_SECS
+        DEFAULT_LOCATION_DELAY_SECS
     }
 }
 
@@ -123,7 +123,7 @@ mod tests {
             sort_by,
             plugin_args: String::new(),
             workers: 0,
-            jump_secs: 0.0,
+            location_delay_secs: 0.0,
         }
     }
 
@@ -287,5 +287,24 @@ mod tests {
         assert!(opts.contains(&"point_count".to_string()));
         assert!(opts.contains(&"tsp".to_string()));
         assert!(opts.contains(&"tsphybrid".to_string()));
+    }
+
+    // ── route_plan: location delay ────────────────────────────────────────────
+
+    #[test]
+    fn plan_defaults_to_8s_and_accepts_fractions() {
+        let (data, clusters) = sample_data();
+        let mut stats = Stats::new("t".into(), 1);
+        main(&data, clusters.clone(), 70.0, &make_cfg(SortBy::LatLon), &mut stats);
+        let plan = stats.route_plan.clone().unwrap();
+        assert_eq!(plan.location_delay_secs, 8.0);
+        assert_eq!(plan.cycle_secs, 40.0);
+
+        let mut cfg = make_cfg(SortBy::LatLon);
+        cfg.location_delay_secs = 6.8;
+        let mut stats = Stats::new("t".into(), 1);
+        main(&data, clusters, 70.0, &cfg, &mut stats);
+        let plan = stats.route_plan.unwrap();
+        assert!((plan.cycle_secs - 34.0).abs() < 1e-9);
     }
 }

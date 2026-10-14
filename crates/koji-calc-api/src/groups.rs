@@ -71,9 +71,11 @@ pub struct RoutingArgs {
     /// worker). Unset/`0`/`1` keeps the single global route.
     #[serde(alias = "segments")]
     pub workers: Option<usize>,
-    /// Observed average seconds per cluster, for the predicted loop times
-    /// (`route_plan` in the stats). Default 6.8.
-    pub jump_secs: Option<f64>,
+    /// Seconds a worker spends per location (fractions allowed, e.g. 6.8),
+    /// used for the predicted loop times (`route_plan` in the stats).
+    /// Default 8. Non-finite or non-positive values fall back to the default.
+    #[serde(alias = "jumpSecs", alias = "location_delay")]
+    pub location_delay: Option<f64>,
 }
 
 impl RoutingArgs {
@@ -82,7 +84,7 @@ impl RoutingArgs {
             sort_by: self.sort_by.unwrap_or(SortBy::Unset),
             plugin_args: self.plugin_args.unwrap_or_default(),
             workers: self.workers.unwrap_or(0),
-            jump_secs: self.jump_secs.unwrap_or(0.0),
+            location_delay_secs: self.location_delay.filter(|d| d.is_finite() && *d > 0.0).unwrap_or(0.0),
         }
     }
 }
