@@ -343,6 +343,8 @@ pub async fn start() -> io::Result<()> {
                             // Nominatim geocoding proxy: GET `/nominatim?query=`
                             // (Polygon/MultiPolygon results for the import dialog).
                             .service(public::v2::nominatim::search_nominatim)
+                            // Scanner (Dragonite) areas for the map's import dialog.
+                            .service(public::v2::scanner::list_areas)
                             // Session auth: login/logout/me.
                             .service(public::v2::auth::scope()),
                     )

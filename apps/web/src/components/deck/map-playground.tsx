@@ -1,5 +1,5 @@
 import type { Layer } from "@deck.gl/core";
-import { ArrowLeft, Save } from "lucide-react";
+import { ArrowLeft, Download, Save } from "lucide-react";
 import { useDataProvider, useNotify } from "ra-core";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
@@ -13,6 +13,7 @@ import { Button } from "@/components/ui/button";
 import { useStartCenter } from "@/lib/use-start-center";
 import { useMarkers } from "@/map/data/use-markers";
 import { routeCoords } from "@/map/lib/calc-overlay";
+import { type ImportMode, applyImport } from "@/map/lib/import-geometry";
 import { featureToAreaFC } from "@/map/lib/calc-request";
 import { buildBaseLayers } from "@/map/lib/layers";
 import { COLOR } from "@/map/lib/map-colors";
@@ -26,6 +27,7 @@ import { loadCamera, saveCamera } from "./map-camera-storage";
 import { routeModeMarkerCategories, routeModeToCategory } from "./route-mode";
 import { RouteStatsPanel } from "./route-stats-panel";
 import { SaveDialog, type SavePayload } from "./save-dialog";
+import { MapImportDialog } from "./map-import-dialog";
 import { TileServerPicker } from "./tile-server-picker";
 import { useTileServer } from "./tile-server";
 import { CALC_PERSIST_KEY, useCalc } from "./use-calc";
@@ -150,6 +152,19 @@ function PlaygroundBody() {
 	const dataProvider = useDataProvider();
 	const notify = useNotify();
 	const [saveOpen, setSaveOpen] = useState(false);
+	const [importOpen, setImportOpen] = useState(false);
+	// DeckMap latches its camera at mount; bumping this remounts the map so it
+	// re-frames on freshly imported shapes.
+	const [importNonce, setImportNonce] = useState(0);
+	const onImport = (features: GeoJSON.Feature[], how: ImportMode) => {
+		const next = applyImport(geometry, features, how);
+		if (next === (geometry ?? null)) {
+			notify("Nothing to import: no polygons in the selection.", { type: "warning" });
+			return;
+		}
+		setValue("geometry", next, { shouldDirty: true });
+		setImportNonce((n) => n + 1);
+	};
 	const [busy, setBusy] = useState(false);
 	// Idempotency latch: the two creates aren't atomic, so if the route step fails
 	// after the geofence was created we keep its id and reuse it on retry (rather
@@ -325,6 +340,15 @@ function PlaygroundBody() {
 						</Button>
 					))}
 				</div>
+				<Button
+					type="button"
+					size="sm"
+					variant="outline"
+					className="bg-background/95 shadow-sm backdrop-blur"
+					onClick={() => setImportOpen(true)}
+				>
+					<Download className="size-4" /> Import
+				</Button>
 				<TileServerPicker
 					options={tiles.options}
 					value={tiles.selected.key}
@@ -348,7 +372,7 @@ function PlaygroundBody() {
 	return (
 		<>
 			<DeckGeoJsonInput
-				key={camKey}
+				key={`${camKey}-${importNonce}`}
 				source="geometry"
 				height="100dvh"
 				tileUrl={tiles.url}
@@ -365,6 +389,11 @@ function PlaygroundBody() {
 						zoom: vs.zoom,
 					})
 				}
+			/>
+			<MapImportDialog
+				open={importOpen}
+				onOpenChange={setImportOpen}
+				onImport={onImport}
 			/>
 			<SaveDialog
 				open={saveOpen}

@@ -19,4 +19,5 @@ pub(crate) mod plugins;
 pub(crate) mod resources;
 pub(crate) mod routes;
 pub(crate) mod s2;
+pub(crate) mod scanner;
 pub(crate) mod webhooks_test;

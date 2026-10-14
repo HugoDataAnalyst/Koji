@@ -28,10 +28,10 @@ export function TileServerPicker({
 				aria-label="Tile server"
 				value={value}
 				onChange={(e) => onChange(e.target.value)}
-				className="min-w-0 max-w-48 bg-transparent outline-none [color-scheme:light_dark]"
+				className="min-w-0 max-w-48 rounded bg-background text-foreground outline-none [color-scheme:light_dark]"
 			>
 				{options.map((o) => (
-					<option key={o.key} value={o.key}>
+					<option key={o.key} value={o.key} className="bg-background text-foreground">
 						{o.label}
 					</option>
 				))}

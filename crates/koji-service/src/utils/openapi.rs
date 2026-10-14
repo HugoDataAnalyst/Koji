@@ -84,6 +84,7 @@ use utoipa::OpenApi;
         // config + nominatim
         crate::public::v2::config::config,
         crate::public::v2::nominatim::search_nominatim,
+        crate::public::v2::scanner::list_areas,
     ),
     components(schemas(
         // envelope

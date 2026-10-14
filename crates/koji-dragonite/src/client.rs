@@ -73,6 +73,14 @@ impl DragoniteClient {
         }
     }
 
+    /// List every area (`GET /v2/areas/`). Used to import a scanner's area
+    /// geofences into Koji. Response shape assumed from the `/v2/areas/{id}`
+    /// resource (a list of [`ApiArea`] in the v2 envelope's `data`).
+    pub async fn list_areas(&self) -> Result<Vec<ApiArea>, DragoniteError> {
+        let req = self.http.get(self.url("/v2/areas/"));
+        self.exec(req).await
+    }
+
     /// PATCH an area, sending only the fields present in `patch` (omitted fields
     /// are left unchanged; a `geofence: Tri::Null` clears that fence). Returns
     /// the updated area. Build `patch` with the
@@ -130,6 +138,19 @@ mod tests {
             c.url("/v2/areas/42"),
             "https://proxy.example/dragonite/v2/areas/42"
         );
+    }
+
+    #[test]
+    fn list_response_decodes_to_areas_with_geofences() {
+        let body = br#"{"status":"ok","data":[
+            {"id":1,"name":"Porto","enabled":true,
+             "geofence":{"type":"Feature","properties":{},"geometry":{"type":"Polygon","coordinates":[[[0,0],[1,0],[1,1],[0,0]]]}}},
+            {"id":2,"name":"NoFence","geofence":null}],
+            "meta":{"total":2,"page":1,"per_page":50}}"#;
+        let areas: Vec<ApiArea> = parse_v2(body).unwrap();
+        assert_eq!(areas.len(), 2);
+        assert!(matches!(areas[0].geofence, crate::patch::Tri::Value(_)));
+        assert!(matches!(areas[1].geofence, crate::patch::Tri::Null));
     }
 
     #[test]
