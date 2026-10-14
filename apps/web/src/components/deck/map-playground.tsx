@@ -26,6 +26,8 @@ import { loadCamera, saveCamera } from "./map-camera-storage";
 import { routeModeMarkerCategories, routeModeToCategory } from "./route-mode";
 import { RouteStatsPanel } from "./route-stats-panel";
 import { SaveDialog, type SavePayload } from "./save-dialog";
+import { TileServerPicker } from "./tile-server-picker";
+import { useTileServer } from "./tile-server";
 import { CALC_PERSIST_KEY, useCalc } from "./use-calc";
 import { useGeometryHistory } from "./use-geometry-history";
 import { useLastSeen } from "./use-last-seen";
@@ -69,6 +71,7 @@ function PlaygroundBody() {
 	const mode = useWatch({ name: "mode" }) as string;
 	const category = routeModeToCategory(mode);
 
+	const tiles = useTileServer();
 	const [startLat, startLon] = useStartCenter();
 	// Persisted camera wins over the server start center; read once at mount.
 	const storedCamera = useMemo(() => loadCamera(), []);
@@ -322,6 +325,11 @@ function PlaygroundBody() {
 						</Button>
 					))}
 				</div>
+				<TileServerPicker
+					options={tiles.options}
+					value={tiles.selected.key}
+					onChange={tiles.select}
+				/>
 				<LastSeenPicker
 					value={lastSeen.value}
 					onChange={lastSeen.setValue}
@@ -343,6 +351,7 @@ function PlaygroundBody() {
 				key={camKey}
 				source="geometry"
 				height="100dvh"
+				tileUrl={tiles.url}
 				contextLayers={contextLayers}
 				toFeatures={geofenceToFeatures}
 				fromFeatures={featuresToGeofence}
