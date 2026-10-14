@@ -1,17 +1,17 @@
 use geo::Coord;
+use model::api::{Precision, single_vec::SingleVec};
 use map_3d::{self, Ellipsoid};
-use model::api::{single_vec::SingleVec, Precision};
 
-type Geocentric = (f64, f64, f64);
-type Topocentric = (f64, f64);
+type Geocentric = (Precision, Precision, Precision);
+type Topocentric = (Precision, Precision);
 
 pub struct Plane {
     center: Geocentric,
     x: Geocentric,
     y: Geocentric,
     z: Geocentric,
-    radius: f64,
-    adjusted_radius: f64,
+    radius: Precision,
+    adjusted_radius: Precision,
     points: Vec<Geocentric>,
 }
 
@@ -30,11 +30,11 @@ impl Default for Plane {
 }
 
 impl Plane {
-    fn euclidean_norm2(&self, x: Geocentric) -> f64 {
+    fn euclidean_norm2(&self, x: Geocentric) -> Precision {
         x.0 * x.0 + x.1 * x.1 + x.2 * x.2
     }
 
-    fn dot_product(&self, x: Geocentric, y: Geocentric) -> f64 {
+    fn dot_product(&self, x: Geocentric, y: Geocentric) -> Precision {
         x.0 * y.0 + x.1 * y.1 + x.2 * y.2
     }
 
@@ -105,7 +105,7 @@ impl Plane {
         plane
     }
 
-    pub fn radius(mut self, radius: f64) -> Self {
+    pub fn radius(mut self, radius: Precision) -> Self {
         self.radius = radius;
         let earth_minor = Ellipsoid::default().parameters().1;
         self.adjusted_radius = 0.5 * earth_minor * (2. * self.radius / earth_minor).sin();
@@ -151,12 +151,103 @@ impl Plane {
         log::debug!("Average scaling: {}", sum / input.len() as Precision);
         log::debug!("Disc scaling: {}", self.adjusted_radius / self.radius);
 
-        ouput.sort_by(|a, b| {
-            geohash::encode(Coord { x: a[1], y: a[0] }, 9)
-                .unwrap()
-                .cmp(&geohash::encode(Coord { x: b[1], y: b[0] }, 9).unwrap())
+        // One encode per point (sort_by encoded BOTH keys per comparison —
+        // 2·n·log n allocating encodes) and no panic on degenerate reprojected
+        // coords: unencodable points sort first on an empty key.
+        ouput.sort_by_cached_key(|p| {
+            geohash::encode(Coord { x: p[1], y: p[0] }, 9).unwrap_or_default()
         });
 
         ouput
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── Plane construction / round-trip ────────────────────────────────────────
+
+    #[test]
+    fn plane_new_with_single_point() {
+        // Constructing a Plane with one point must not panic.
+        let pts: SingleVec = vec![[40.0, -74.0]];
+        let _plane = Plane::new(&pts);
+    }
+
+    #[test]
+    fn plane_project_and_reverse_round_trip() {
+        // Points projected to flat space and reversed must return close to original.
+        let pts: SingleVec = vec![[40.0, -74.0], [40.01, -74.01], [40.005, -73.99]];
+        let plane = Plane::new(&pts).radius(1_000.0); // 1 km
+        let projected = plane.project();
+        assert_eq!(projected.len(), pts.len());
+
+        let reversed = plane.reverse(projected.iter().map(|c| [c.x, c.y]).collect());
+        assert_eq!(reversed.len(), pts.len());
+
+        // After round-trip, each point should be within ~1 km of an original.
+        // We just check the output set is not degenerate (lat/lon are valid).
+        for p in &reversed {
+            assert!(p[0].abs() < 90.0, "lat out of range: {}", p[0]);
+            assert!(p[1].abs() < 180.0, "lon out of range: {}", p[1]);
+        }
+    }
+
+    #[test]
+    fn plane_project_preserves_count() {
+        let pts: SingleVec = (0..20)
+            .map(|i| {
+                [
+                    40.0 + i as Precision * 0.001,
+                    -74.0 + i as Precision * 0.001,
+                ]
+            })
+            .collect();
+        let plane = Plane::new(&pts).radius(500.0);
+        let projected = plane.project();
+        assert_eq!(projected.len(), 20);
+    }
+
+    #[test]
+    fn plane_radius_stores_correctly() {
+        let pts: SingleVec = vec![[0.0, 0.0]];
+        let plane = Plane::new(&pts).radius(70.0);
+        // adjusted_radius must be finite and positive (sanity, not exact value).
+        assert!(plane.adjusted_radius.is_finite());
+        assert!(plane.adjusted_radius > 0.0);
+    }
+
+    // ── Math helpers ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn euclidean_norm2_of_unit() {
+        let plane = Plane::default();
+        let n = plane.euclidean_norm2((1.0, 0.0, 0.0));
+        assert!((n - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn dot_product_orthogonal_is_zero() {
+        let plane = Plane::default();
+        let d = plane.dot_product((1.0, 0.0, 0.0), (0.0, 1.0, 0.0));
+        assert!(d.abs() < 1e-12);
+    }
+
+    #[test]
+    fn cross_product_of_standard_basis() {
+        let plane = Plane::default();
+        let (x, y, z) = plane.cross_product((1.0, 0.0, 0.0), (0.0, 1.0, 0.0));
+        assert!(x.abs() < 1e-12);
+        assert!(y.abs() < 1e-12);
+        assert!((z - 1.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn normalize_gives_unit_vector() {
+        let plane = Plane::default();
+        let n = plane.normalize((3.0, 4.0, 0.0));
+        let len = (n.0 * n.0 + n.1 * n.1 + n.2 * n.2).sqrt();
+        assert!((len - 1.0).abs() < 1e-10);
     }
 }

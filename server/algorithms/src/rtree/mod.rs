@@ -1,7 +1,7 @@
 pub mod cluster;
 pub mod point;
 
-use model::api::{single_vec::SingleVec, Precision};
+use model::api::{Precision, single_vec::SingleVec};
 use point::Point;
 
 use rayon::prelude::{IntoParallelRefIterator, ParallelIterator};
@@ -28,10 +28,7 @@ pub fn cluster_info<'a>(
         .map(|cluster| {
             cluster::Cluster::new(
                 *cluster,
-                point_tree
-                    .locate_all_at_point(&cluster.center)
-                    .into_iter()
-                    .collect(),
+                point_tree.locate_all_at_point(cluster.center).collect(),
                 vec![],
             )
         })

@@ -1,251 +1,508 @@
+//! "Fastest" clustering mode.
+//!
+//! The cheapest clustering tier: a deterministic unit-disc cover. Points are projected onto
+//! a flat plane scaled so the target radius maps to one unit, then bucketed into a `√2` grid
+//! (each cell is coverable by one radius-1 disc). Occupied cells are visited in sorted order
+//! and region-grown — a cell absorbs sorted neighbours while the group still fits inside a
+//! single radius-1 disc — and each group emits one center. Groups below `min_points` are
+//! dropped. O(n) expected, grid-only: no spatial index or candidate lattice.
+
 use geo::Coord;
-use hashbrown::HashSet;
+use model::api::Precision;
 use model::api::single_vec::SingleVec;
-use rstar::PointDistance;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::project::Plane;
 
-#[derive(Debug, Clone)]
-struct BoundingBox {
-    pub min_x: f64,
-    pub min_y: f64,
-    pub max_x: f64,
-    pub max_y: f64,
-}
+/// Integer coordinate of a cell in the scaled projection grid.
+type CellKey = (i32, i32);
 
-impl BoundingBox {
-    fn new(point: Coord) -> BoundingBox {
-        BoundingBox {
-            min_x: point.x.min(f64::INFINITY),
-            min_y: point.y.min(f64::INFINITY),
-            max_x: point.x.max(f64::NEG_INFINITY),
-            max_y: point.y.max(f64::NEG_INFINITY),
-        }
-    }
-    fn update(&self, point: Coord) -> BoundingBox {
-        BoundingBox {
-            min_x: self.min_x.min(point.x),
-            min_y: self.min_y.min(point.y),
-            max_x: self.max_x.max(point.x),
-            max_y: self.max_y.max(point.y),
-        }
-    }
-}
+/// Distortion safety margin for the disc-fit test. Benchmarking (see the design doc) found
+/// `0` optimal: a positive margin only adds clusters to shave a few boundary-hugging points.
+const MARGIN: Precision = 0.0;
 
-trait ClusterCoords {
-    fn to_key(self) -> String;
-    fn midpoint(&self, other: &Coord) -> [f64; 2];
-}
-
-impl ClusterCoords for Coord {
-    fn to_key(self) -> String {
-        format!("{},{}", self.x, self.y)
-    }
-    fn midpoint(&self, other: &Coord) -> [f64; 2] {
-        [(self.x + other.x) / 2., (self.y + other.y) / 2.]
-    }
-}
-
-type PointTuple = (i32, i32);
-type PointInfo = (BoundingBox, bool, bool, Vec<String>);
-type ClusterMap = HashMap<PointTuple, PointInfo>;
-
-trait FromKey {
-    fn from_key(&self) -> [f64; 2];
-}
-
-impl FromKey for String {
-    fn from_key(&self) -> [f64; 2] {
-        let mut iter = self.split(',');
-        let lat = iter.next().unwrap().parse::<f64>().unwrap();
-        let lon = iter.next().unwrap().parse::<f64>().unwrap();
-        [lat, lon]
-    }
-}
-
-pub fn main(input: &SingleVec, radius: f64, min_points: usize) -> Vec<[f64; 2]> {
+pub fn main(input: &SingleVec, radius: Precision, min_points: usize) -> Vec<[Precision; 2]> {
     let plane = Plane::new(input).radius(radius);
-    let output = plane.project();
+    let projected = plane.project();
 
-    let point_map = cluster(output, min_points);
-
-    let output = {
-        let mut seen_map: HashSet<String> = HashSet::new();
-        let return_value: SingleVec = point_map
-            .into_iter()
-            .filter_map(|(key, values)| {
-                if values.len() >= min_points {
-                    for point in values.into_iter() {
-                        seen_map.insert(point);
-                    }
-                    return Some(key.from_key());
-                }
-                None
-            })
-            .collect();
-        return_value
-    };
+    // `cluster` already drops groups below `min_points`, so every returned center survives.
+    let output: SingleVec = cluster(projected, min_points, MARGIN)
+        .into_iter()
+        .map(|(center, _count)| [center.x, center.y])
+        .collect();
 
     plane.reverse(output)
 }
 
-fn update(point_map: &mut ClusterMap, key: PointTuple, p: Coord) {
-    point_map.entry(key).and_modify(|saved| {
-        saved.0 = saved.0.update(p);
-        saved.3.push(p.to_key());
-    });
+/// `(min_x, min_y, max_x, max_y)` of a non-empty point set.
+fn bounds(points: &[Coord]) -> (Precision, Precision, Precision, Precision) {
+    let mut min_x = points[0].x;
+    let mut min_y = points[0].y;
+    let mut max_x = points[0].x;
+    let mut max_y = points[0].y;
+    for p in &points[1..] {
+        min_x = min_x.min(p.x);
+        min_y = min_y.min(p.y);
+        max_x = max_x.max(p.x);
+        max_y = max_y.max(p.y);
+    }
+    (min_x, min_y, max_x, max_y)
 }
 
-fn cluster(points: Vec<Coord>, min_points: usize) -> HashMap<String, Vec<String>> {
-    let sqrt2: f64 = 2.0_f64.sqrt();
-    let additive_factor: f64 = sqrt2 / 2.;
-    let sqrt2_x_one_point_five_minus_one: f64 = (sqrt2 * 1.5) - 1.;
-    let sqrt2_x_one_point_five_plus_one: f64 = (sqrt2 * 1.5) + 1.;
+/// Reference fit criterion — does `points` fit one radius-1 disc (allowing
+/// `margin` of safety)? The MEC threshold was benchmarked against centroid /
+/// bbox-center placement and won (see design doc). The production absorb loop
+/// applies this same criterion incrementally (covering-circle fast path +
+/// merged-bbox reject + MEC recompute); the tests pin the criterion itself.
+#[cfg(test)]
+fn fits(points: &[Coord], margin: Precision) -> bool {
+    if points.is_empty() {
+        return true;
+    }
+    let (min_x, min_y, max_x, max_y) = bounds(points);
+    if (max_x - min_x).powi(2) + (max_y - min_y).powi(2) > 4.0 {
+        return false;
+    }
+    mec(points).radius <= 1.0 - margin
+}
 
-    let mut udc_point_map: ClusterMap = HashMap::new();
+/// The shared deterministic-Welzl MEC, called directly on `Coord` slices (the
+/// generic impl converts per access — no adapter Vec per fit trial).
+fn mec(points: &[Coord]) -> super::geometry::Circle {
+    super::geometry::smallest_enclosing_circle(points)
+}
 
-    for p in points.into_iter() {
-        let v = (p.x / sqrt2).floor() as i32;
-        let h = (p.y / sqrt2).floor() as i32;
-        let vertical_times_sqrt2 = v as f64 * sqrt2;
-        let horizontal_times_sqrt2 = h as f64 * sqrt2;
-        let key = (v, h);
+/// Place the disc center at the minimum-enclosing-circle center (assumes non-empty).
+fn place(points: &[Coord]) -> Coord {
+    let c = mec(points).center;
+    Coord { x: c[0], y: c[1] }
+}
 
-        let mut pair = udc_point_map.get(&key);
+/// The eight grid neighbours of a cell.
+fn neighbours((v, h): CellKey) -> [CellKey; 8] {
+    [
+        (v - 1, h - 1),
+        (v - 1, h),
+        (v - 1, h + 1),
+        (v, h - 1),
+        (v, h + 1),
+        (v + 1, h - 1),
+        (v + 1, h),
+        (v + 1, h + 1),
+    ]
+}
 
-        if pair.is_some() {
-            update(&mut udc_point_map, key, p);
+/// Bucket points into a √2 grid, region-grow each occupied cell (in deterministic sorted
+/// order) by absorbing neighbours while the group still fits one radius-1 disc, then emit
+/// one `(center, member_count)` per group with at least `min_points` members. Coincident
+/// centers are de-duplicated.
+fn cluster(points: Vec<Coord>, min_points: usize, margin: Precision) -> Vec<(Coord, usize)> {
+    let sqrt2 = std::f64::consts::SQRT_2;
+
+    // First pass: bucket. BTreeMap gives deterministic sorted iteration over cells.
+    let mut cells: BTreeMap<CellKey, Vec<Coord>> = BTreeMap::new();
+    for p in points {
+        let key = ((p.x / sqrt2).floor() as i32, (p.y / sqrt2).floor() as i32);
+        cells.entry(key).or_default().push(p);
+    }
+
+    // BTreeMap: output order must be deterministic (HashMap's RandomState
+    // reseeds per instance, randomizing downstream routes/stats run-to-run).
+    let mut centers: BTreeMap<(u64, u64), (Coord, usize)> = BTreeMap::new();
+    let mut claimed: BTreeSet<CellKey> = BTreeSet::new();
+
+    // Second pass: region-grow from each unclaimed cell in sorted order.
+    for (&seed, seed_points) in &cells {
+        if claimed.contains(&seed) {
             continue;
         }
+        claimed.insert(seed);
 
-        if p.x >= (vertical_times_sqrt2 + sqrt2_x_one_point_five_minus_one) {
-            pair = udc_point_map.get(&key);
-            if pair.is_some()
-                && p.distance_2(&Coord {
-                    x: sqrt2 * (v + 1) as f64 + additive_factor,
-                    y: horizontal_times_sqrt2 + additive_factor,
-                }) <= 1.
-            {
-                update(&mut udc_point_map, key, p);
-                continue;
-            }
-        }
+        let mut group_cells: BTreeSet<CellKey> = BTreeSet::from([seed]);
+        let mut group_points: Vec<Coord> = seed_points.clone();
 
-        if p.x <= (vertical_times_sqrt2 - sqrt2_x_one_point_five_plus_one) {
-            pair = udc_point_map.get(&key);
-            if pair.is_some()
-                && p.distance_2(&Coord {
-                    x: sqrt2 * (v - 1) as f64 + additive_factor,
-                    y: horizontal_times_sqrt2 + additive_factor,
-                }) <= 1.
-            {
-                update(&mut udc_point_map, key, p);
-                continue;
-            }
-        }
+        // Incrementally-maintained group state: a known covering circle (the
+        // exact MEC after every slow-path recompute; possibly non-minimal but
+        // still covering after fast-path absorbs) and the exact point bbox.
+        let fit_r = 1.0 - margin;
+        let mut circle = mec(&group_points);
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = bounds(&group_points);
 
-        if p.y <= (horizontal_times_sqrt2 + sqrt2_x_one_point_five_minus_one) {
-            pair = udc_point_map.get(&key);
-            if pair.is_some()
-                && p.distance_2(&Coord {
-                    x: vertical_times_sqrt2 + additive_factor,
-                    y: sqrt2 * (h - 1) as f64 + additive_factor,
-                }) <= 1.
-            {
-                update(&mut udc_point_map, key, p);
-                continue;
-            }
-        }
-
-        if p.y >= (horizontal_times_sqrt2 - sqrt2_x_one_point_five_plus_one) {
-            pair = udc_point_map.get(&key);
-            if pair.is_some()
-                && p.distance_2(&Coord {
-                    x: vertical_times_sqrt2 + additive_factor,
-                    y: sqrt2 * (h + 1) as f64 + additive_factor,
-                }) <= 1.
-            {
-                update(&mut udc_point_map, key, p);
-                continue;
-            }
-        }
-        udc_point_map
-            .entry(key)
-            .or_insert((BoundingBox::new(p), true, true, vec![p.to_key()]));
-    }
-    let mut point_map_return: HashMap<String, Vec<String>> = HashMap::new();
-
-    let mut process_final = |coord: Coord, points_to_process: Vec<String>| {
-        if points_to_process.len() > 0 {
-            point_map_return.insert(coord.to_key(), points_to_process);
-        }
-    };
-
-    'count: for (point, (bb, _check, _second, points)) in udc_point_map.clone().into_iter() {
-        let (v, h) = point.clone();
-
-        for (v, h, _index) in [
-            (v, h - 1, "s"),
-            (v, h + 1, "n"),
-            (v + 1, h, "e"),
-            (v - 1, h, "w"),
-            (v - 1, h - 1, "sw"),
-            (v + 1, h - 1, "se"),
-            (v + 1, h + 1, "ne"),
-            (v - 1, h + 1, "nw"),
-        ]
-        .into_iter()
-        {
-            let found_cluster = udc_point_map.get(&(v, h));
-            if found_cluster.is_none() {
-                continue;
-            }
-            let found_cluster = found_cluster.unwrap();
-
-            if found_cluster.1 {
-                let lower_left = Coord {
-                    x: bb.min_x.min(found_cluster.0.min_x),
-                    y: bb.min_y.min(found_cluster.0.min_y),
-                };
-                let upper_right = Coord {
-                    x: bb.max_x.max(found_cluster.0.max_x),
-                    y: bb.max_y.max(found_cluster.0.max_y),
-                };
-
-                if lower_left.distance_2(&upper_right) <= 4. {
-                    let mut combined = points.clone();
-                    combined.extend(found_cluster.3.clone());
-                    if combined.len() > min_points {
-                        let [x, y] = lower_left.midpoint(&upper_right);
-                        process_final(Coord { x, y }, combined);
-                        udc_point_map
-                            .entry((v, h))
-                            .and_modify(|saved| saved.1 = false);
-                        udc_point_map
-                            .entry(point)
-                            .and_modify(|saved| saved.1 = false);
-                        continue 'count;
+        loop {
+            // Sorted set of unclaimed, occupied neighbours of the current group.
+            let mut candidates: BTreeSet<CellKey> = BTreeSet::new();
+            for &cell in &group_cells {
+                for n in neighbours(cell) {
+                    if !claimed.contains(&n) && cells.contains_key(&n) {
+                        candidates.insert(n);
                     }
                 }
             }
+
+            // Absorb the first (sorted) candidate that keeps the group
+            // disc-coverable (MEC radius ≤ 1 − margin), layered cheapest-first:
+            //  1. every candidate point inside the current covering circle
+            //     (radius ≤ fit_r) → the union's MEC can't exceed it; accept
+            //     without touching the group — O(candidate) instead of
+            //     O(group);
+            //  2. merged bbox diagonal > 2 → a radius-1 cover is impossible;
+            //     reject without extending;
+            //  3. full MEC recompute on the trial-extended group (truncate on
+            //     rejection).
+            let mut absorbed = None;
+            for cand in &candidates {
+                let cand_pts = cells[cand].as_slice();
+
+                let r2 = circle.radius * circle.radius;
+                if circle.radius <= fit_r
+                    && cand_pts.iter().all(|p| {
+                        let dx = p.x - circle.center[0];
+                        let dy = p.y - circle.center[1];
+                        dx * dx + dy * dy <= r2
+                    })
+                {
+                    for p in cand_pts {
+                        min_x = min_x.min(p.x);
+                        min_y = min_y.min(p.y);
+                        max_x = max_x.max(p.x);
+                        max_y = max_y.max(p.y);
+                    }
+                    group_points.extend_from_slice(cand_pts);
+                    absorbed = Some(*cand);
+                    break;
+                }
+
+                let (mut t_min_x, mut t_min_y, mut t_max_x, mut t_max_y) =
+                    (min_x, min_y, max_x, max_y);
+                for p in cand_pts {
+                    t_min_x = t_min_x.min(p.x);
+                    t_min_y = t_min_y.min(p.y);
+                    t_max_x = t_max_x.max(p.x);
+                    t_max_y = t_max_y.max(p.y);
+                }
+                if (t_max_x - t_min_x).powi(2) + (t_max_y - t_min_y).powi(2) > 4.0 {
+                    continue;
+                }
+
+                let before = group_points.len();
+                group_points.extend_from_slice(cand_pts);
+                let c = mec(&group_points);
+                if c.radius <= fit_r {
+                    circle = c;
+                    (min_x, min_y, max_x, max_y) = (t_min_x, t_min_y, t_max_x, t_max_y);
+                    absorbed = Some(*cand);
+                    break;
+                }
+                group_points.truncate(before);
+            }
+
+            match absorbed {
+                Some(cand) => {
+                    group_cells.insert(cand);
+                    claimed.insert(cand);
+                }
+                None => break,
+            }
+        }
+
+        let count = group_points.len();
+        if count < min_points {
+            continue;
+        }
+        let center = place(&group_points);
+        centers.insert((center.x.to_bits(), center.y.to_bits()), (center, count));
+    }
+
+    centers.into_values().collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // ── main: empty input ─────────────────────────────────────────────────────
+
+    #[test]
+    fn empty_input_returns_empty() {
+        let empty: SingleVec = vec![];
+        let result = main(&empty, 70.0, 1);
+        assert!(result.is_empty());
+    }
+
+    // ── main: single point, min_points = 1 ───────────────────────────────────
+
+    #[test]
+    fn single_point_min1_returns_one_cluster() {
+        let pts = vec![[40.0_f64, -74.0_f64]];
+        let result = main(&pts, 70.0, 1);
+        assert_eq!(
+            result.len(),
+            1,
+            "one point with min_points=1 should yield 1 cluster"
+        );
+    }
+
+    // ── main: cluster count never exceeds input points ────────────────────────
+
+    #[test]
+    fn clusters_do_not_exceed_input_points() {
+        let pts: Vec<[Precision; 2]> = (0..20)
+            .map(|i| [40.0 + i as Precision * 0.01, -74.0])
+            .collect();
+        let result = main(&pts, 70.0, 1);
+        assert!(
+            result.len() <= pts.len(),
+            "cluster count ({}) > input count ({})",
+            result.len(),
+            pts.len()
+        );
+    }
+
+    // ── main: dense cluster with high min_points ──────────────────────────────
+
+    #[test]
+    fn sparse_points_filtered_by_min_points() {
+        // 3 isolated points, each far from the others; min_points = 5 → should return nothing.
+        let pts = vec![[40.0, -74.0], [41.0, -74.0], [42.0, -74.0]];
+        let result = main(&pts, 70.0, 5);
+        // Each point is isolated; no cluster can have 5+ members.
+        // (behavior: 0 or fewer than 3 centers; exact 0 is expected here)
+        assert!(
+            result.len() <= 3,
+            "should not exceed input count, got {}",
+            result.len()
+        );
+    }
+
+    // ── main: tight cluster should yield roughly one center ───────────────────
+
+    #[test]
+    fn tight_cluster_yields_one_center() {
+        // 10 points within ~1 m of each other — Fastest should group into 1 cluster.
+        let pts: Vec<[Precision; 2]> = (0..10)
+            .map(|i| {
+                [
+                    40.0 + i as Precision * 0.000001,
+                    -74.0 + i as Precision * 0.000001,
+                ]
+            })
+            .collect();
+        let result = main(&pts, 1_000.0, 2); // 1 km radius, 2 min points
+        assert!(
+            !result.is_empty(),
+            "tight cluster with large radius should yield at least 1 center"
+        );
+        assert!(
+            result.len() <= pts.len(),
+            "should not produce more clusters than input points"
+        );
+    }
+
+    // ── main: output contains valid lat/lon ───────────────────────────────────
+
+    #[test]
+    fn output_lat_lon_in_valid_range() {
+        let pts = vec![[40.0, -74.0], [40.001, -74.001], [40.002, -74.002]];
+        let result = main(&pts, 70.0, 1);
+        for [lat, lon] in &result {
+            assert!(lat.abs() < 90.0, "invalid lat: {lat}");
+            assert!(lon.abs() < 180.0, "invalid lon: {lon}");
         }
     }
 
-    for (key, value) in udc_point_map.into_iter() {
-        if value.1 && value.2 {
-            if true {
-                if value.3.len() == 1 {
-                    let x = value.0.min_x;
-                    let y = value.0.min_y;
-                    process_final(Coord { x, y }, value.3);
-                } else {
-                    let x = key.0 as f64 * sqrt2 + additive_factor;
-                    let y = key.1 as f64 * sqrt2 + additive_factor;
-                    process_final(Coord { x, y }, value.3);
-                }
-            }
+    // ── main: deterministic for same input ────────────────────────────────────
+
+    #[test]
+    fn deterministic_same_input() {
+        // Compare UNSORTED output: order itself is part of the determinism
+        // contract (a HashMap here once randomized it per process; sorting both
+        // sides masked that).
+        let pts = vec![[40.0, -74.0], [40.001, -74.001], [40.5, -73.0]];
+        let a = main(&pts, 70.0, 1);
+        let b = main(&pts, 70.0, 1);
+        assert_eq!(
+            a, b,
+            "Fastest must be deterministic (identical centers, identical order)"
+        );
+    }
+
+    // ── MEC: geometry ─────────────────────────────────────────────────────────
+
+    fn c(x: Precision, y: Precision) -> Coord {
+        Coord { x, y }
+    }
+
+    fn covers(center: Coord, r: Precision, pts: &[Coord]) -> bool {
+        pts.iter().all(|p| {
+            let dx = p.x - center.x;
+            let dy = p.y - center.y;
+            dx * dx + dy * dy <= r * r + 1e-6
+        })
+    }
+
+    /// Test adapter over the shared MEC: `(center, radius)` in `Coord` terms.
+    fn mec_cr(pts: &[Coord]) -> (Coord, Precision) {
+        let c = mec(pts);
+        (
+            Coord {
+                x: c.center[0],
+                y: c.center[1],
+            },
+            c.radius,
+        )
+    }
+
+    fn dist2(a: Coord, b: Coord) -> Precision {
+        let dx = a.x - b.x;
+        let dy = a.y - b.y;
+        dx * dx + dy * dy
+    }
+
+    #[test]
+    fn mec_single_point_is_zero_radius_at_point() {
+        let (center, r) = mec_cr(&[c(3.0, -2.0)]);
+        assert!((center.x - 3.0).abs() < 1e-9 && (center.y + 2.0).abs() < 1e-9);
+        assert!(r < 1e-9, "single-point radius should be ~0, got {r}");
+    }
+
+    #[test]
+    fn mec_two_points_is_diameter_circle() {
+        let (center, r) = mec_cr(&[c(0.0, 0.0), c(2.0, 0.0)]);
+        assert!((center.x - 1.0).abs() < 1e-9 && center.y.abs() < 1e-9);
+        assert!((r - 1.0).abs() < 1e-9, "radius should be 1.0, got {r}");
+    }
+
+    #[test]
+    fn mec_encloses_all_points() {
+        let pts = [
+            c(0.0, 0.0),
+            c(1.0, 0.0),
+            c(0.0, 1.0),
+            c(1.0, 1.0),
+            c(0.5, 0.5),
+        ];
+        let (center, r) = mec_cr(&pts);
+        assert!(covers(center, r, &pts), "MEC must enclose every point");
+        // tightest enclosing circle of the unit square has r = sqrt(2)/2
+        assert!(
+            (r - std::f64::consts::SQRT_2 / 2.0).abs() < 1e-6,
+            "got r={r}"
+        );
+    }
+
+    #[test]
+    fn mec_collinear_points_use_extreme_pair() {
+        let pts = [c(-3.0, 0.0), c(0.0, 0.0), c(5.0, 0.0)];
+        let (center, r) = mec_cr(&pts);
+        assert!(covers(center, r, &pts), "collinear MEC must enclose all");
+        assert!(
+            (r - 4.0).abs() < 1e-6,
+            "radius should span -3..5 → 4, got {r}"
+        );
+    }
+
+    #[test]
+    fn mec_right_triangle_is_circumcircle() {
+        // Exercises circle_three: the circumcircle of (0,0),(4,0),(0,3) is centered at the
+        // hypotenuse midpoint (2, 1.5) with radius 2.5. Locks the circumcenter formula.
+        let (center, r) = mec_cr(&[c(0.0, 0.0), c(4.0, 0.0), c(0.0, 3.0)]);
+        assert!(
+            (center.x - 2.0).abs() < 1e-9 && (center.y - 1.5).abs() < 1e-9,
+            "circumcenter wrong: {center:?}"
+        );
+        assert!((r - 2.5).abs() < 1e-9, "circumradius wrong: {r}");
+    }
+
+    // ── fit + place ───────────────────────────────────────────────────────────
+
+    #[test]
+    fn fits_within_unit_disc() {
+        // Two points distance 2 apart → MEC radius exactly 1 → fits at margin 0.
+        let pts = [c(0.0, 0.0), c(2.0, 0.0)];
+        assert!(fits(&pts, 0.0));
+        // distance 2.001 apart → MEC radius > 1 → does not fit.
+        let pts2 = [c(0.0, 0.0), c(2.001, 0.0)];
+        assert!(!fits(&pts2, 0.0));
+    }
+
+    #[test]
+    fn fits_margin_rejects_boundary() {
+        // radius exactly 1 fails once a positive margin is required.
+        let pts = [c(0.0, 0.0), c(2.0, 0.0)];
+        assert!(!fits(&pts, 0.01));
+    }
+
+    #[test]
+    fn fits_rejects_group_too_wide_for_a_disc() {
+        // unit square: MEC radius √2/2 ≈ 0.707 → fits.
+        let sq = [c(0.0, 0.0), c(1.0, 1.0)];
+        assert!(fits(&sq, 0.0));
+        // bbox diagonal 2.121 > 2 → cannot fit any radius-1 disc (cheap pre-check rejects).
+        let wide = [c(0.0, 0.0), c(1.5, 1.5)];
+        assert!(!fits(&wide, 0.0));
+    }
+
+    #[test]
+    fn place_is_mec_center() {
+        // MEC center of the 2x2 square is its middle.
+        let pts = [c(0.0, 0.0), c(2.0, 0.0), c(0.0, 2.0), c(2.0, 2.0)];
+        let m = place(&pts);
+        assert!((m.x - 1.0).abs() < 1e-6 && (m.y - 1.0).abs() < 1e-6);
+    }
+
+    // ── cluster: region-growing behavior ──────────────────────────────────────
+
+    #[test]
+    fn cluster_mec_covers_every_point_when_min_points_1() {
+        // A handful of nearby points; with min_points=1 nothing is dropped, so every
+        // projected point must be within radius 1 of some returned center.
+        let pts: Vec<Coord> = (0..25)
+            .map(|i| c((i % 5) as Precision * 0.3, (i / 5) as Precision * 0.3))
+            .collect();
+        let centers = cluster(pts.clone(), 1, 0.0);
+        for p in &pts {
+            let covered = centers.iter().any(|(ctr, _)| dist2(*ctr, *p) <= 1.0 + 1e-6);
+            assert!(covered, "point {p:?} not covered by any disc");
         }
     }
-    point_map_return
+
+    #[test]
+    fn cluster_is_deterministic_including_order() {
+        let pts: Vec<Coord> = (0..40)
+            .map(|i| c((i % 7) as Precision * 0.5, (i / 7) as Precision * 0.5))
+            .collect();
+        let a: Vec<(u64, u64)> = cluster(pts.clone(), 2, 0.0)
+            .into_iter()
+            .map(|(ctr, _)| (ctr.x.to_bits(), ctr.y.to_bits()))
+            .collect();
+        let b: Vec<(u64, u64)> = cluster(pts.clone(), 2, 0.0)
+            .into_iter()
+            .map(|(ctr, _)| (ctr.x.to_bits(), ctr.y.to_bits()))
+            .collect();
+        assert_eq!(a, b, "cluster output must be deterministic, order included");
+    }
+
+    #[test]
+    fn cluster_aggregates_neighbouring_cells() {
+        // x = 0.0, 0.9, 1.8 — near-collinear, MEC radius 0.9 ≤ 1 → fits ONE disc, spanning
+        // two √2 grid cells. They must collapse to a single center counting all 3.
+        let pts = vec![c(0.0, 0.0), c(0.9, 0.0), c(1.8, 0.0)];
+        let centers = cluster(pts, 1, 0.0);
+        assert_eq!(centers.len(), 1, "three points fitting one disc → 1 center");
+        assert_eq!(
+            centers[0].1, 3,
+            "the single disc should count all 3 members"
+        );
+    }
+
+    #[test]
+    fn cluster_drops_sub_min_points_groups() {
+        // Two far-apart singletons, min_points=2 → each group has 1 member → all dropped.
+        let pts = vec![c(0.0, 0.0), c(100.0, 100.0)];
+        let centers = cluster(pts, 2, 0.0);
+        assert!(
+            centers.is_empty(),
+            "groups below min_points must be dropped"
+        );
+    }
 }

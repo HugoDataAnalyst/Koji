@@ -53,7 +53,26 @@ fn hav(a: [Precision; 2], b: [Precision; 2]) -> Precision {
     2.0 * 6_371_008.8 * h.sqrt().asin()
 }
 
+struct StderrLogger;
+
+impl log::Log for StderrLogger {
+    fn enabled(&self, metadata: &log::Metadata) -> bool {
+        metadata.level() <= log::Level::Info
+    }
+    fn log(&self, record: &log::Record) {
+        if self.enabled(record.metadata()) {
+            eprintln!("[{}] {}", record.level(), record.args());
+        }
+    }
+    fn flush(&self) {}
+}
+
+static LOGGER: StderrLogger = StderrLogger;
+
 fn main() {
+    if std::env::var("BENCH_VERBOSE").is_ok() {
+        let _ = log::set_logger(&LOGGER).map(|_| log::set_max_level(log::LevelFilter::Info));
+    }
     let csv = arg("--csv").expect("--csv required");
     let radius: Precision = arg("--radius").map_or(70.0, |v| v.parse().unwrap());
     let workers: usize = arg("--workers").map_or(0, |v| v.parse().unwrap());

@@ -1,5 +1,6 @@
 use model;
 
+mod bbox;
 pub mod bootstrap;
 pub mod clustering;
 mod plugin;

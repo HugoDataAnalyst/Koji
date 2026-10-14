@@ -8,6 +8,15 @@ use serde::Serialize;
 
 use crate::rtree::{self, cluster::Cluster, cluster_info, point};
 
+/// Env-tunable score weight; absent/unparsable means 0 (component reported
+/// but not priced).
+pub fn score_lambda(key: &str) -> Precision {
+    std::env::var(key)
+        .ok()
+        .and_then(|v| v.parse::<Precision>().ok())
+        .unwrap_or(0.0)
+}
+
 const WIDTH: &str = "=======================================================================";
 
 #[derive(Debug, Clone, Serialize)]
@@ -323,7 +332,7 @@ impl Stats {
                 self.cluster_stats
                     .increment(cluster.unique.len(), cluster.all.len());
 
-                if let Some(point) = tree.locate_at_point(&cluster.point.center) {
+                if let Some(point) = tree.locate_at_point(cluster.point.center) {
                     points_covered.insert(point);
                 }
                 points_covered.extend(&cluster.all);

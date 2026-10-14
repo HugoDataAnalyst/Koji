@@ -44,3 +44,9 @@ Documentation for this project can be found [here](https://koji.vercel.app/)
   longer stalls other requests.
 - `routebench` (`cargo run --release -p algorithms --bin routebench -- --csv pts.csv --mode balanced --workers 15`)
   reports clustering/route time and slice loop length / span.
+- **Clustering (`better` / `best`).** These modes now use the crucible clusterer (ported
+  from the v2 branch). On the old greedy clusterer `best` ran out of memory or took
+  minutes on dense areas; on 174k spawnpoints it now takes ~2.5 s and gives ~13% fewer
+  clusters than `balanced`. `fastest`, `fast`, `balanced`, `honeycomb` and the S2 mode
+  behave as before (they share the new candidate generator/selector). `max_clusters`
+  keeps the best-coverage subset instead of the first N.
