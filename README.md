@@ -39,6 +39,6 @@ Documentation for this project can be found [here](https://koji.vercel.app/)
 - `KOJI_TSP_THREADS` (default `min(cores, 4)`), `KOJI_TSP_MAX_SECS` (default 20):
   caps for the global TSP solve, whose budget is now 0.2 ms/point (it used to be
   1 ms/point on every core with no quality gain past ~0.1 ms/point).
-- `KOJI_SEG_MS_PER_POINT` (default 1): per-segment solver budget.
+- `KOJI_SEG_MS_PER_POINT` (default 0.3): per-segment solver budget.
 - `routebench` (`cargo run --release -p algorithms --bin routebench -- --csv pts.csv --workers 15`)
   reports route time and slice loop length / span.

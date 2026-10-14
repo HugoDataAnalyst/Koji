@@ -52,7 +52,7 @@ impl Budget {
 
     /// Budget for one small single-threaded sub-solve (a worker segment).
     pub fn segment(n: usize) -> Self {
-        let per_pt = env_num::<f64>("KOJI_SEG_MS_PER_POINT").unwrap_or(1.0);
+        let per_pt = env_num::<f64>("KOJI_SEG_MS_PER_POINT").unwrap_or(0.3);
         let ms = ((n as f64 * per_pt) as u64).clamp(10, 1_500);
         Self {
             threads: 1,
