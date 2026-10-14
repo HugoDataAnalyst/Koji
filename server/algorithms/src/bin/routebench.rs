@@ -104,7 +104,7 @@ fn main() {
             9,
             FeatureCollection::default(),
             "",
-            false,
+            std::env::args().any(|a| a == "--center"),
             false,
         )
     });
@@ -150,6 +150,22 @@ fn main() {
         }
         max_span = max_span.max(hav(lo, hi));
     }
+    if points.len() <= 12_000 {
+        // margin check: distance from every point to its nearest center
+        let (mut worst, mut tight, mut uncovered) = (0.0f64, 0usize, 0usize);
+        for p in &points {
+            let d = route.iter().map(|c| hav(*p, *c)).fold(f64::MAX, f64::min);
+            worst = worst.max(d);
+            if d > radius {
+                uncovered += 1;
+            } else if d > radius * 0.95 {
+                tight += 1;
+            }
+        }
+        println!(
+            "MARGIN worst_m={worst:.1} within5pct_of_edge={tight} uncovered={uncovered}"
+        );
+    }
     if let Some(plan) = &stats.route_plan {
         println!(
             "PLAN workers={} delay_s={} cycle_s={:.0} ({:.1} min) total_worker_s={:.0}",
@@ -161,8 +177,10 @@ fn main() {
         );
     }
     println!(
-        "RESULT points={} clusters={n} radius={radius} mode={mode} sort={sort} workers={workers} cluster_s={cluster_s:.2} route_s={route_s:.2} global_loop_m={:.0} slice_loop_m={loop_sum:.0} slice_max_span_m={max_span:.0} slice_len={min_len}..{max_len}",
-        points.len(),
+        "RESULT covered={}/{} center={} clusters={n} radius={radius} mode={mode} sort={sort} workers={workers} cluster_s={cluster_s:.2} route_s={route_s:.2} global_loop_m={:.0} slice_loop_m={loop_sum:.0} slice_max_span_m={max_span:.0} slice_len={min_len}..{max_len}",
+        stats.points_covered,
+        stats.total_points,
+        std::env::args().any(|a| a == "--center"),
         stats.total_distance,
     );
 }
