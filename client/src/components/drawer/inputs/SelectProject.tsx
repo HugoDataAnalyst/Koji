@@ -26,9 +26,12 @@ export default function SelectProject({
 }: {
   label?: string
 }) {
-  const { feature: featureCache, geofence: geofenceCache } =
-    useDbCache.getState()
-  const { Polygon, MultiPolygon } = useShapes.getState()
+  // Subscribe (not `getState()`): the geofence cache fills in after this mounts, and
+  // a stale snapshot made `geofenceCache[id]` undefined for a project's fences.
+  const featureCache = useDbCache((s) => s.feature)
+  const geofenceCache = useDbCache((s) => s.geofence)
+  const Polygon = useShapes((s) => s.Polygon)
+  const MultiPolygon = useShapes((s) => s.MultiPolygon)
 
   const options = useDbCache((s) => s.project)
 
@@ -49,20 +52,24 @@ export default function SelectProject({
     const addFeatures = [
       ...new Set(
         added.flatMap((a) =>
-          options[a].geofences?.map((r) => [
-            geofenceCache[r].id,
-            `${geofenceCache[r].id}__${geofenceCache[r].mode}__KOJI`,
-          ]),
+          (options[a]?.geofences ?? [])
+            .filter((r) => geofenceCache[r])
+            .map((r) => [
+              geofenceCache[r].id,
+              `${geofenceCache[r].id}__${geofenceCache[r].mode}__KOJI`,
+            ]),
         ),
       ),
     ].filter((a): a is [number, KojiKey] => Boolean(a))
     const removeFeature = [
       ...new Set(
         deleted.flatMap((a) =>
-          options[a].geofences?.map((r) => [
-            geofenceCache[r].geo_type,
-            `${geofenceCache[r].id}__${geofenceCache[r].mode}__KOJI`,
-          ]),
+          (options[a]?.geofences ?? [])
+            .filter((r) => geofenceCache[r])
+            .map((r) => [
+              geofenceCache[r].geo_type,
+              `${geofenceCache[r].id}__${geofenceCache[r].mode}__KOJI`,
+            ]),
         ),
       ),
     ].filter((a): a is [GeometryTypes | undefined, KojiKey] => Boolean(a))
@@ -128,19 +135,21 @@ export default function SelectProject({
         )}
         renderOption={(props, option, { selected: s }) => {
           const fullOption = options[option]
-          const keys =
-            fullOption.geofences?.map((id) => {
-              const dbFence = geofenceCache[id]
-              return `${dbFence.id}__${dbFence.mode}__KOJI` as KojiKey
-            }) || []
+          if (!fullOption) return null
+          // A project can reference a geofence that isn't in the cache (yet, or
+          // deleted); skip those instead of crashing the whole list.
+          const fences = (fullOption.geofences ?? [])
+            .map((id) => geofenceCache[id])
+            .filter(Boolean)
+          const keys = fences.map(
+            (dbFence) => `${dbFence.id}__${dbFence.mode}__KOJI` as KojiKey,
+          )
 
           const allSelected =
-            !!fullOption.geofences?.length &&
-            keys.every((id) => Polygon[id] || MultiPolygon[id])
+            !!keys.length && keys.every((id) => Polygon[id] || MultiPolygon[id])
           const partialSelected =
             allSelected ||
-            fullOption.geofences?.some((id) => {
-              const dbFence = geofenceCache[id]
+            fences.some((dbFence) => {
               const shapeKey: KojiKey = `${dbFence.id}__${dbFence.mode}__KOJI`
               return dbFence.geo_type === 'Polygon'
                 ? Polygon[shapeKey]
